@@ -12,6 +12,6 @@ COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 ARG TARGETOS
 ARG TARGETARCH
 COPY kagent-extensions-${TARGETOS}-${TARGETARCH} /kagent-extensions
-USER giantswarm
+USER 1000:1000
 
 ENTRYPOINT ["/kagent-extensions"]
