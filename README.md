@@ -91,6 +91,36 @@ selector.
 
 A re-pin that drops one of these rows breaks the build of this binary.
 
+## End-to-end test
+
+`e2e/` proves the binary against a running kagent installation. It swaps the
+controller Deployment's image for the binary's, sets the binary's
+configuration in its environment, and calls the controller's API port
+directly, through a port-forward of its own:
+
+- identity headers alone are refused, and change nothing beside a token;
+- a person's token is verified against a test issuer and one of its
+  audiences, and RBAC on the person and the token's groups decides the
+  Harness roster and whether a Session starts;
+- a ServiceAccount is admitted only with a token for the controller's audience
+  and only from the allowlist;
+- the session reader may get a Session and nothing else.
+
+It creates its RBAC, ServiceAccounts, a namespace and a pod that serves the test
+issuer's keys, and removes them and restores the controller afterwards. The
+image must be pullable by the cluster. Suspend anything that reverts drift on
+the controller Deployment (a Flux HelmRelease with drift detection) for the run.
+
+```sh
+KAGENT_E2E_IMAGE=gsoci.azurecr.io/giantswarm/kagent-extensions:<version> \
+  go test ./e2e/ -v -count=1 -timeout 20m
+```
+
+`KAGENT_E2E_NAMESPACE` names the controller's namespace (default `kagent`),
+`KAGENT_E2E_ISSUER_IMAGE` an image with busybox's `httpd` (default
+`gsoci.azurecr.io/giantswarm/busybox:1.37.0`). Without `KAGENT_E2E_IMAGE` the
+suite skips.
+
 ## Pinning the fork
 
 `go.mod` pins the fork with `replace` lines. At each re-pin:
