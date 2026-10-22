@@ -94,10 +94,22 @@ reads from the environment, as the upstream controller does.
 | `--authorization-mode` | `kubernetes` | or `noop` |
 | `--namespace-selector`, `--include-namespace` | empty | |
 | `--authorization-decision-ttl` | `10s` | |
+| `--allow-version-skew` | `false` | run under a kagent chart of another release |
 
 The controller's ServiceAccount needs `create` on `tokenreviews` and
 `subjectaccessreviews`, and `list` on `namespaces` when it ranges over a
 selector.
+
+## The kagent chart's release
+
+The binary is the kagent controller of one fork release, `FORK_VERSION`, and
+runs only under the kagent chart of that release: the chart's Deployment,
+CRDs and configuration are written for its own controller, and the controller
+migrates the database at start. At start it compares `FORK_VERSION` with
+`IMAGE_TAG`, which the chart's controller ConfigMap sets to the chart's
+release, and stops on a mismatch or without `IMAGE_TAG`.
+`--allow-version-skew` (`KAGENT_EXTENSIONS_ALLOW_VERSION_SKEW=true`) runs it
+anyway, for a test of another release.
 
 ## Seams it relies on
 
@@ -139,12 +151,17 @@ KAGENT_E2E_IMAGE=gsoci.azurecr.io/giantswarm/kagent-extensions:<version> \
 `KAGENT_E2E_ISSUER_IMAGE` an image with busybox's `httpd` (default
 `gsoci.azurecr.io/giantswarm/busybox:1.37.0`). Without `KAGENT_E2E_IMAGE` the
 suite skips.
+The binary stops under a kagent chart of another release than the one it is
+built on (see "The kagent chart's release"); run the suite against an
+installation of the same release.
 
 ## Pinning the fork
 
 `go.mod` pins the fork with `replace` lines. At each re-pin:
 
-1. **Use the pseudo-version of the fork's release tag commit.** The fork keeps
+1. **Use the pseudo-version of the fork's release tag commit, and name the
+   release in `FORK_VERSION`** (`<release> <first 12 characters of the
+   commit>`; `TestForkVersionMatchesGoMod` holds the two together). The fork keeps
    upstream's module path (`github.com/kagent-dev/kagent/go`) and has no
    `go/vX` tags, so the pin is a pseudo-version such as
    `v0.0.0-20261022160333-e5785cca562a` (release `v1.24.6`): `v0.0.0-`, the

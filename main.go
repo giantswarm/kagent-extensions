@@ -37,6 +37,13 @@ func run(ctx context.Context, arguments []string) error {
 	if err != nil {
 		return err
 	}
+	fork, err := parseForkVersion(forkVersionFile)
+	if err != nil {
+		return err
+	}
+	if err := checkChartRelease(fork, os.Getenv(imageTagEnv), o.allowVersionSkew); err != nil {
+		return err
+	}
 	clientset, err := kubernetesClientset()
 	if err != nil {
 		return err

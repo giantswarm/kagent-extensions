@@ -38,6 +38,8 @@ type options struct {
 	namespaceSelector string
 	includeNamespaces stringList
 	decisionTTL       time.Duration
+
+	allowVersionSkew bool
 }
 
 // stringList is a flag given once per value, or once with values separated by
@@ -70,6 +72,7 @@ func parseOptions(flags *flag.FlagSet, arguments []string) (options, error) {
 	flags.StringVar(&o.namespaceSelector, "namespace-selector", "", "Label selector of the Namespaces a collection read ranges over when WATCH_NAMESPACES is empty.")
 	flags.Var(&o.includeNamespaces, "include-namespace", "Namespace a collection read ranges over beside the selected ones; repeat or separate with commas.")
 	flags.DurationVar(&o.decisionTTL, "authorization-decision-ttl", authz.DefaultDecisionTTL, "How long a review's answer is reused.")
+	flags.BoolVar(&o.allowVersionSkew, "allow-version-skew", false, "Run under a kagent chart of another release than the fork release the binary is built on (IMAGE_TAG).")
 	if err := setFromEnvironment(flags, os.LookupEnv); err != nil {
 		return options{}, err
 	}
