@@ -1,0 +1,20 @@
+{
+  packageRules: [
+    {
+      // The fork is pinned at the commit of one of its release tags, and the
+      // binary builds with the fork's own versions of the modules both
+      // require: the README's "Pinning the fork". A digest of the fork's
+      // branch carries unreleased migrations the binary would apply to an
+      // installation's database. They move by hand at a re-pin.
+      matchManagers: [
+        'gomod',
+      ],
+      matchPackageNames: [
+        'github.com/giantswarm/kagent-upstream/go',
+        'github.com/coreos/go-oidc/v3',
+        'k8s.io/**',
+      ],
+      enabled: false,
+    },
+  ],
+}
