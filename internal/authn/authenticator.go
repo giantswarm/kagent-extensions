@@ -120,7 +120,7 @@ func New(config Config, reviews TokenReviewer) (*Authenticator, error) {
 	if config.SessionReader != "" && slices.Contains(config.MachineCallers, config.SessionReader) {
 		return nil, fmt.Errorf("the session reader %q must not also be a machine caller", config.SessionReader)
 	}
-	if reviews != nil && config.MachineAudience != "" {
+	if len(config.MachineCallers) > 0 || config.SessionReader != "" {
 		authenticator.machines = newMachineReviewer(reviews, config.MachineAudience, config.ReviewCacheTTL, config.Now)
 	}
 	return authenticator, nil
@@ -152,6 +152,11 @@ func (a *Authenticator) authenticate(ctx context.Context, headers http.Header) (
 		return a.person(ctx, issuer, token, authHeader)
 	}
 	if strings.HasPrefix(unverified.Subject, serviceAccountPrefix) {
+		// The unverified sub only spares a TokenReview for a ServiceAccount
+		// that is never admitted; the review's answer decides.
+		if !a.admitted(unverified.Subject) {
+			return nil, fmt.Errorf("%w: %s is not an admitted machine caller", ErrUnauthenticated, unverified.Subject)
+		}
 		return a.machine(ctx, token, authHeader, unverified.expiry())
 	}
 	return nil, fmt.Errorf("%w: the token's issuer %q is not trusted", ErrUnauthenticated, unverified.Issuer)
@@ -166,7 +171,8 @@ func (a *Authenticator) person(ctx context.Context, issuer *issuerVerifier, toke
 	if userID == "" {
 		return nil, fmt.Errorf("%w: the token has no %q claim", ErrUnauthenticated, a.usernameClaim)
 	}
-	// The API server takes an email as the user name only when it is verified.
+	// Stricter than the API server, which also takes an email whose token has
+	// no email_verified claim.
 	if a.usernameClaim == "email" {
 		if verified, _ := claims["email_verified"].(bool); !verified {
 			return nil, fmt.Errorf("%w: the token's email is not verified", ErrUnauthenticated)
@@ -185,9 +191,6 @@ func (a *Authenticator) person(ctx context.Context, issuer *issuerVerifier, toke
 }
 
 func (a *Authenticator) machine(ctx context.Context, token, authHeader string, expiry time.Time) (auth.Session, error) {
-	if a.machines == nil {
-		return nil, fmt.Errorf("%w: no machine caller is admitted", ErrUnauthenticated)
-	}
 	user, err := a.machines.review(ctx, token, expiry)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnauthenticated, err)
@@ -203,6 +206,11 @@ func (a *Authenticator) machine(ctx context.Context, token, authHeader string, e
 		return nil, fmt.Errorf("%w: %s is not an admitted machine caller", ErrUnauthenticated, user.name)
 	}
 	return &MachineSession{P: principal, authHeader: authHeader}, nil
+}
+
+// admitted reports whether user is a machine caller or the session reader.
+func (a *Authenticator) admitted(user string) bool {
+	return slices.Contains(a.machineCallers, user) || (a.sessionReader != "" && user == a.sessionReader)
 }
 
 // UpstreamAuth forwards the caller's credential and user ID to a runtime. A

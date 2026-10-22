@@ -431,6 +431,7 @@ func TestAuthenticateRefusesMachines(t *testing.T) {
 		"no audience in answer":   {user: workspaceUser, answer: authenticatedAs(workspaceUser), reason: `for the audience "kagent"`},
 		"not a ServiceAccount":    {user: workspaceUser, answer: authenticatedAs(aliceEmail, machineAudience), reason: "not a ServiceAccount"},
 		"not on the allowlist":    {user: otherUser, answer: authenticatedAs(otherUser, machineAudience), reason: "is not an admitted machine caller"},
+		"another admitted name":   {user: workspaceUser, answer: authenticatedAs(otherUser, machineAudience), reason: "is not an admitted machine caller"},
 		"TokenReview unavailable": {user: workspaceUser, err: errors.New("connection refused"), reason: "connection refused"},
 	}
 	for name, test := range tests {
@@ -444,6 +445,16 @@ func TestAuthenticateRefusesMachines(t *testing.T) {
 			require.Nil(t, session)
 		})
 	}
+}
+
+func TestAuthenticateSendsNoReviewForAServiceAccountNeverAdmitted(t *testing.T) {
+	issuer := newTestIssuer(t)
+	reviews := &fakeTokenReviews{}
+	authenticator := newAuthenticator(t, issuer, reviews, nil)
+
+	_, err := authenticator.Authenticate(t.Context(), bearer(serviceAccountToken(t, "system:serviceaccount:org-acme:default", time.Now().Add(time.Hour))), nil)
+	require.ErrorIs(t, err, ErrUnauthenticated)
+	require.Zero(t, reviews.count())
 }
 
 func TestAuthenticateRemembersNoRefusal(t *testing.T) {
