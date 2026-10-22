@@ -3,7 +3,7 @@ module github.com/giantswarm/kagent-extensions
 go 1.27.3
 
 require (
-	github.com/coreos/go-oidc/v3 v3.21.0
+	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/kagent-dev/kagent/go v0.0.0
@@ -247,7 +247,7 @@ require (
 
 // The fork keeps upstream's module path, so the binary imports upstream's
 // packages by name and the replace swaps in the fork at a pinned commit.
-replace github.com/kagent-dev/kagent/go => github.com/giantswarm/kagent-upstream/go v0.0.0-20261022194833-7fc58bcbff9a
+replace github.com/kagent-dev/kagent/go => github.com/giantswarm/kagent-upstream/go v0.0.0-20261022160333-e5785cca562a
 
 // A dependency's replace lines do not apply to the main module, so the fork's
 // own replace block is copied here and must follow it at every re-pin.

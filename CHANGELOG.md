@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The end-to-end test releases the fields it wrote on the controller Deployment once it restores them, so the release that renders the Deployment owns them again.
+- The fork pin is the commit of release `v1.24.6` again, and `github.com/coreos/go-oidc/v3` the fork's `v3.18.0`; Renovate does not move them or the `k8s.io` modules.
 - The image runs as the numeric user `1000:1000`, so a pod with `runAsNonRoot` and no `runAsUser` starts it.
 
 

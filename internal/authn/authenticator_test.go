@@ -29,6 +29,7 @@ const (
 	workspaceUser   = "system:serviceaccount:agent-platform:workspace-manager"
 	readerUser      = "system:serviceaccount:agent-platform:klaus-gateway"
 	audClaim        = "aud"
+	orgGroup        = "org-acme"
 	issClaim        = "iss"
 	subClaim        = "sub"
 	emailClaim      = "email"
@@ -96,7 +97,7 @@ func (i *testIssuer) personClaims() jwt.MapClaims {
 	return jwt.MapClaims{
 		issClaim: i.server.URL, subClaim: "CgVhbGljZRIEbG9jYWw", audClaim: uiAudience,
 		expClaim: time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(),
-		emailClaim: aliceEmail, "email_verified": true, "groups": []any{"org-acme", adminsGroup},
+		emailClaim: aliceEmail, "email_verified": true, "groups": []any{orgGroup, adminsGroup},
 	}
 }
 
@@ -160,7 +161,7 @@ func (f *fakeTokenReviews) count() int {
 func authenticatedAs(user string, audiences ...string) authenticationv1.TokenReviewStatus {
 	return authenticationv1.TokenReviewStatus{
 		Authenticated: true, Audiences: audiences,
-		User: authenticationv1.UserInfo{Username: user, Groups: []string{"system:serviceaccounts", "system:serviceaccounts:agent-platform", "system:authenticated"}},
+		User: authenticationv1.UserInfo{Username: user, Groups: []string{"system:serviceaccounts", "system:serviceaccounts:agent-platform", authenticatedGroup}},
 	}
 }
 
@@ -230,14 +231,14 @@ func TestAuthenticatePerson(t *testing.T) {
 	person, ok := session.(*Session)
 	require.True(t, ok, "a person's token yields a Session, got %T", session)
 	require.Equal(t, aliceEmail, person.Principal().User.ID)
-	require.Equal(t, []string{"org-acme", adminsGroup}, person.Principal().User.Groups)
+	require.Equal(t, []string{orgGroup, adminsGroup}, person.Principal().User.Groups)
 	require.Empty(t, person.Principal().Agent.ID)
 	require.Equal(t, aliceEmail, person.Principal().Claims[emailClaim])
 	require.False(t, person.Principal().User.Kubernetes)
 	user, groups, err := person.ReviewedAs()
 	require.NoError(t, err)
 	require.Equal(t, aliceEmail, user)
-	require.Equal(t, []string{adminsGroup, "org-acme", "system:authenticated"}, groups)
+	require.Equal(t, []string{adminsGroup, orgGroup, authenticatedGroup}, groups)
 }
 
 // A person is reviewed as the API server's OIDC authenticator maps the same
@@ -250,11 +251,11 @@ func TestAuthenticatePersonReviewedUnderThePrefixes(t *testing.T) {
 	session, err := authenticator.Authenticate(t.Context(), bearer(issuer.sign(t, issuer.personClaims())), nil)
 	require.NoError(t, err)
 	require.Equal(t, aliceEmail, session.Principal().User.ID, "the principal keeps the unprefixed user ID")
-	require.Equal(t, []string{"org-acme", adminsGroup}, session.Principal().User.Groups)
+	require.Equal(t, []string{orgGroup, adminsGroup}, session.Principal().User.Groups)
 	user, groups, err := session.(*Session).ReviewedAs()
 	require.NoError(t, err)
 	require.Equal(t, "oidc:alice@example.com", user)
-	require.Equal(t, []string{"oidc:admins", "oidc:org-acme", "system:authenticated"}, groups)
+	require.Equal(t, []string{"oidc:admins", "oidc:org-acme", authenticatedGroup}, groups)
 }
 
 // A person whose user or group lands in the reserved system: space maps to no
@@ -462,7 +463,7 @@ func TestAuthenticateMachine(t *testing.T) {
 		user, groups, err := machine.ReviewedAs()
 		require.NoError(t, err)
 		require.Equal(t, workspaceUser, user)
-		require.Equal(t, []string{"system:authenticated", "system:serviceaccounts", "system:serviceaccounts:agent-platform"}, groups)
+		require.Equal(t, []string{authenticatedGroup, "system:serviceaccounts", "system:serviceaccounts:agent-platform"}, groups)
 
 		// Remembered for the TTL, then reviewed again.
 		_, err = authenticator.Authenticate(t.Context(), bearer(token), nil)

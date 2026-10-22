@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	checkpointType       = "Checkpoint"
 	machineUser          = "system:serviceaccount:agent-platform:workspace-manager"
 	readerUser           = "system:serviceaccount:agent-platform:klaus-gateway"
 	sessionID            = "0b9a7f0e-6a0c-4d38-9a1e-8c4f2f0b4a11"
@@ -262,7 +263,7 @@ func TestCheckLeavesOwnerScopedRecordsToTheirService(t *testing.T) {
 		{auth.VerbGet, auth.Resource{Type: sessionType, Name: sessionID}},
 		{auth.VerbUpdate, auth.Resource{Type: sessionType, Name: sessionID}},
 		{auth.VerbGet, auth.Resource{Type: sessionType}},
-		{auth.VerbCreate, auth.Resource{Type: "Checkpoint"}},
+		{auth.VerbCreate, auth.Resource{Type: checkpointType}},
 		{auth.VerbList, auth.Resource{Type: "ScheduledRun"}},
 		{auth.VerbGet, auth.Resource{Type: "Sandbox", Name: "s"}},
 		{auth.VerbList, auth.Resource{Type: "ToolServerType"}},
@@ -329,7 +330,7 @@ func TestCheckSessionReader(t *testing.T) {
 		{auth.VerbDelete, auth.Resource{Type: sessionType, Name: sessionID}},
 		{auth.VerbGet, auth.Resource{Type: allCreatorsType}},
 		{auth.VerbGet, auth.Resource{Type: agentType, Namespace: orgACME, Name: agentName}},
-		{auth.VerbGet, auth.Resource{Type: "Checkpoint", Name: sessionID}},
+		{auth.VerbGet, auth.Resource{Type: checkpointType, Name: sessionID}},
 	} {
 		require.ErrorContains(t, authorizer.Check(ctx, reader(), refused.verb, refused.resource), "the session reader may only get a Session", "%s %+v", refused.verb, refused.resource)
 	}

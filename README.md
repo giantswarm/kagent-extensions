@@ -170,6 +170,10 @@ suite skips.
    authorizer.
 
 Then run `go mod tidy`, `go build ./...` and `go test ./...`.
+`renovate-custom.json5` keeps Renovate off the fork pin and the modules the
+fork requires that this binary uses directly (`github.com/coreos/go-oidc/v3`,
+`k8s.io/*`): a digest of the fork's branch carries migrations no release has,
+which the binary would apply to an installation's database.
 
 ## Build
 
