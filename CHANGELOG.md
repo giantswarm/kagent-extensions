@@ -20,11 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The binary is built on fork release `v1.25.1`.
 - Machine `TokenReview` results are cached with `k8s.io/apiserver`'s token cache. Concurrent calls with the same token send one review, and an expired ServiceAccount token is refused without a review.
 - The authorizer caches at most 32768 decisions.
 
 ### Fixed
 
+- The binary runs the fork line's own database migrations after the built-in ones, in the controller's schema (`KAGENT_POSTGRES_DATABASE_SCHEMA`), as the fork's controller does.
 - `renovate.json5` extends `renovate-custom.json5`, so Renovate leaves the fork pin, `github.com/coreos/go-oidc/v3` and the `k8s.io` modules alone; the pin is the commit of fork release `v1.24.6` again and go-oidc the fork's `v3.18.0`.
 - The end-to-end test releases the fields it wrote on the controller Deployment once it restores them, so the release that renders the Deployment owns them again.
 - The fork pin is the commit of release `v1.24.6` again, and `github.com/coreos/go-oidc/v3` the fork's `v3.18.0`; Renovate does not move them or the `k8s.io` modules.
