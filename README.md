@@ -25,12 +25,20 @@ nothing.
 | Caller | Verified by | User | Groups |
 |---|---|---|---|
 | Person | Signature, issuer and expiry against one of `--oidc-issuers` (discovery and key set, or an in-cluster `jwksURL`); the token must name one of that issuer's audiences | `--oidc-username-claim` (an `email` must be verified) | `--oidc-groups-claim`, from the verified token only |
-| Machine | A `TokenReview` with `--machine-audience` in `spec.audiences`, remembered for `--token-review-cache-ttl` and never past the token's `exp`; the ServiceAccount must be a `--machine-caller` | `system:serviceaccount:<namespace>:<name>` | as the API server names them |
+| Machine | A `TokenReview` with `--machine-audience` in `spec.audiences`, cached for `--token-review-cache-ttl`; an expired token is refused without a review; the ServiceAccount must be a `--machine-caller` | `system:serviceaccount:<namespace>:<name>` | as the API server names them |
 | Session reader | As a machine, for `--session-reader` | as a machine | as a machine |
 
 Any other token is refused: a token of another issuer, an unsigned token, and
-a Substrate actor JWT among them. The kind of caller is the session type the
-authenticator returns, never a claim.
+a Substrate actor JWT among them.
+
+Machine `TokenReview` results are cached with the API server's own token cache
+(`k8s.io/apiserver/pkg/authentication/token/cache`). Calls that arrive at the
+same time with the same token send one `TokenReview`. Failed reviews are not
+cached.
+
+The authenticator also works out which user and groups each call is checked
+as, and passes them to the authorizer with the session. The authorizer does
+not read them from the principal or from token claims.
 
 ### Authorization
 
@@ -38,8 +46,12 @@ Every check is a `SubjectAccessReview`:
 
 - A person is reviewed as the API server's OIDC authenticator maps the same
   token: the user ID and groups with `--oidc-username-prefix` and
-  `--oidc-groups-prefix`, plus `system:authenticated`. A name in the reserved
-  `system:` space is refused.
+  `--oidc-groups-prefix`, plus `system:authenticated`. If a person's user
+  name or one of their groups starts with `system:` once prefixed, they are
+  still authenticated, but every call that needs a review is refused and every
+  collection read comes back empty. Their own records, such as their Sessions,
+  still work. The controller stores records under the user ID without the
+  prefix.
 - A machine is reviewed under the names the API server gave it.
 - A collection read is scoped per namespace (tenant = namespace): one review
   cluster-wide, then one per namespace of `WATCH_NAMESPACES`, or of the
@@ -50,8 +62,15 @@ Every check is a `SubjectAccessReview`:
   `sessions.api.kagent.dev`.
 - The session reader may `get` a Session by ID, if RBAC grants it `get` on
   `sessions.api.kagent.dev`, and do nothing else.
-- Decisions are reused for `--authorization-decision-ttl`. A review the API
-  server does not answer is `Unavailable`, not a refusal.
+- Some records have no Kubernetes object behind them: an existing Session, a
+  Checkpoint, a ScheduledRun, a Sandbox, the tool server types and the
+  Substrate inventory. These are not reviewed; their service only returns the
+  caller's own rows and rows shared with them. `internal/authz/rules.go` lists
+  how each resource type is checked, and a type missing from it is refused.
+- Review results are cached for `--authorization-decision-ttl`, up to 32768
+  entries, and identical reviews that arrive at the same time are sent once.
+  If the API server does not answer, or answers with an `evaluationError`, the
+  call fails as `Unavailable` rather than as a refusal, and nothing is cached.
 
 `--authorization-mode noop` permits every call of an authenticated caller.
 
@@ -140,10 +159,17 @@ suite skips.
    controller configuration as an argument. The binary builds against the fork
    until the re-pin past that change.
 4. **Keep the dependencies the fork builds with.** A module the fork already
-   requires (`github.com/coreos/go-oidc/v3`, for example) stays at the fork's
-   version.
+   requires (`github.com/coreos/go-oidc/v3`, `k8s.io/apiserver`, for example)
+   stays at the fork's version.
+5. **Follow the fork's resource types.** `TestRulesFollowTheFork` compares
+   `internal/authz/rules.go` with the tables in the fork's own authorizer
+   (`core/pkg/auth/kubernetes.go`) at the pinned commit. If the fork added,
+   removed or changed a resource type, the test fails: update the rule. Once
+   the fork drops that file the test fails as well, and the list has to be
+   checked by hand against the types the fork's services pass to the
+   authorizer.
 
-Then run `go mod tidy` and `go build ./...`.
+Then run `go mod tidy`, `go build ./...` and `go test ./...`.
 
 ## Build
 

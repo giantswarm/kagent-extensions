@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -130,4 +131,40 @@ func groupsFromClaim(value any, claim string) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("the %q claim is neither a string nor a list", claim)
 	}
+}
+
+// reservedPrefix starts the users and groups Kubernetes itself assigns:
+// ServiceAccounts, nodes, system:masters. A person never maps to one, so a
+// person cannot be reviewed as a ServiceAccount or as a cluster administrator.
+const reservedPrefix = "system:"
+
+// authenticatedGroup is the group the API server adds to every authenticated
+// user; a review without it would deny what a binding to that group grants.
+const authenticatedGroup = "system:authenticated"
+
+// claimMapping is how a person's token maps to a Kubernetes user, as the API
+// server's --oidc-username-claim, --oidc-groups-claim, --oidc-username-prefix
+// and --oidc-groups-prefix map it.
+type claimMapping struct {
+	usernameClaim, groupsClaim   string
+	usernamePrefix, groupsPrefix string
+}
+
+// reviewedAs maps a person's unprefixed user ID and groups to the subject the
+// API server authenticates from the same token. A name that lands in the
+// reserved system: space maps to no subject.
+func (m claimMapping) reviewedAs(userID string, groups []string) (string, []string, error) {
+	user := m.usernamePrefix + userID
+	if strings.HasPrefix(user, reservedPrefix) {
+		return "", nil, fmt.Errorf("the user %q is reserved for Kubernetes", user)
+	}
+	reviewed := []string{authenticatedGroup}
+	for _, group := range groups {
+		group = m.groupsPrefix + group
+		if strings.HasPrefix(group, reservedPrefix) {
+			return "", nil, fmt.Errorf("the group %q is reserved for Kubernetes", group)
+		}
+		reviewed = append(reviewed, group)
+	}
+	return user, reviewed, nil
 }

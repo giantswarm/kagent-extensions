@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -132,9 +133,14 @@ type fakeTokenReviews struct {
 	err     error
 	calls   int
 	last    *authenticationv1.TokenReview
+	// wait, when set, holds every review until it is closed.
+	wait chan struct{}
 }
 
 func (f *fakeTokenReviews) Create(_ context.Context, review *authenticationv1.TokenReview, _ metav1.CreateOptions) (*authenticationv1.TokenReview, error) {
+	if f.wait != nil {
+		<-f.wait
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
@@ -197,6 +203,18 @@ func newAuthenticator(t *testing.T, issuer *testIssuer, reviews TokenReviewer, c
 	return authenticator
 }
 
+// machineAuthenticator admits the machine callers and the session reader, and
+// trusts an issuer it never contacts, so that it runs in a synctest bubble.
+func machineAuthenticator(t *testing.T, reviews TokenReviewer) *Authenticator {
+	t.Helper()
+	authenticator, err := New(Config{
+		Issuers:       []Issuer{{URL: "https://dex.example.com", Audiences: []string{uiAudience}}},
+		UsernameClaim: emailClaim, MachineAudience: machineAudience, MachineCallers: []string{workspaceUser}, SessionReader: readerUser,
+	}, reviews)
+	require.NoError(t, err)
+	return authenticator
+}
+
 func TestAuthenticatePerson(t *testing.T) {
 	issuer := newTestIssuer(t)
 	authenticator := newAuthenticator(t, issuer, &fakeTokenReviews{}, nil)
@@ -209,12 +227,62 @@ func TestAuthenticatePerson(t *testing.T) {
 	session, err := authenticator.Authenticate(t.Context(), headers, map[string][]string{"user_id": {"mallory@example.com"}})
 	require.NoError(t, err)
 
-	person, ok := session.(*PersonSession)
-	require.True(t, ok, "a person's token yields a PersonSession, got %T", session)
+	person, ok := session.(*Session)
+	require.True(t, ok, "a person's token yields a Session, got %T", session)
 	require.Equal(t, aliceEmail, person.Principal().User.ID)
 	require.Equal(t, []string{"org-acme", adminsGroup}, person.Principal().User.Groups)
 	require.Empty(t, person.Principal().Agent.ID)
 	require.Equal(t, aliceEmail, person.Principal().Claims[emailClaim])
+	require.False(t, person.Principal().User.Kubernetes)
+	user, groups, err := person.ReviewedAs()
+	require.NoError(t, err)
+	require.Equal(t, aliceEmail, user)
+	require.Equal(t, []string{adminsGroup, "org-acme", "system:authenticated"}, groups)
+}
+
+// A person is reviewed as the API server's OIDC authenticator maps the same
+// token: the prefixes before the user ID and every group, and
+// system:authenticated.
+func TestAuthenticatePersonReviewedUnderThePrefixes(t *testing.T) {
+	issuer := newTestIssuer(t)
+	authenticator := newAuthenticator(t, issuer, &fakeTokenReviews{}, func(c *Config) { c.UsernamePrefix, c.GroupsPrefix = "oidc:", "oidc:" })
+
+	session, err := authenticator.Authenticate(t.Context(), bearer(issuer.sign(t, issuer.personClaims())), nil)
+	require.NoError(t, err)
+	require.Equal(t, aliceEmail, session.Principal().User.ID, "the principal keeps the unprefixed user ID")
+	require.Equal(t, []string{"org-acme", adminsGroup}, session.Principal().User.Groups)
+	user, groups, err := session.(*Session).ReviewedAs()
+	require.NoError(t, err)
+	require.Equal(t, "oidc:alice@example.com", user)
+	require.Equal(t, []string{"oidc:admins", "oidc:org-acme", "system:authenticated"}, groups)
+}
+
+// A person whose user or group lands in the reserved system: space maps to no
+// subject: it could otherwise be reviewed as a ServiceAccount or as a cluster
+// administrator.
+func TestAuthenticateMapsReservedNamesToNoSubject(t *testing.T) {
+	issuer := newTestIssuer(t)
+	for name, test := range map[string]struct {
+		prefix string
+		change func(jwt.MapClaims)
+		reason string
+	}{
+		"reserved user":           {change: func(c jwt.MapClaims) { c[emailClaim] = "system:admin" }, reason: `the user "system:admin" is reserved`},
+		"reserved group":          {change: func(c jwt.MapClaims) { c["groups"] = []any{"system:masters"} }, reason: `the group "system:masters" is reserved`},
+		"prefix lands in system:": {prefix: "system:", change: func(jwt.MapClaims) {}, reason: "is reserved for Kubernetes"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			authenticator := newAuthenticator(t, issuer, &fakeTokenReviews{}, func(c *Config) { c.UsernamePrefix = test.prefix })
+			claims := issuer.personClaims()
+			test.change(claims)
+			session, err := authenticator.Authenticate(t.Context(), bearer(issuer.sign(t, claims)), nil)
+			require.NoError(t, err)
+			user, groups, err := session.(*Session).ReviewedAs()
+			require.ErrorContains(t, err, test.reason)
+			require.Empty(t, user)
+			require.Empty(t, groups)
+		})
+	}
 }
 
 func TestAuthenticatePersonAcceptsEveryAudienceOfItsIssuer(t *testing.T) {
@@ -225,7 +293,7 @@ func TestAuthenticatePersonAcceptsEveryAudienceOfItsIssuer(t *testing.T) {
 
 	session, err := authenticator.Authenticate(t.Context(), bearer(issuer.sign(t, claims)), nil)
 	require.NoError(t, err)
-	require.IsType(t, &PersonSession{}, session)
+	require.IsType(t, &Session{}, session)
 }
 
 func TestAuthenticatePersonWithoutGroupsClaim(t *testing.T) {
@@ -375,46 +443,74 @@ func TestAuthenticatePersonWithAnInClusterKeySet(t *testing.T) {
 }
 
 func TestAuthenticateMachine(t *testing.T) {
-	issuer := newTestIssuer(t)
-	now := &clock{now: time.Now()}
-	token := serviceAccountToken(t, workspaceUser, now.Now().Add(time.Hour))
-	reviews := &fakeTokenReviews{answers: map[string]authenticationv1.TokenReviewStatus{token: authenticatedAs(workspaceUser, machineAudience)}}
-	authenticator := newAuthenticator(t, issuer, reviews, func(c *Config) { c.Now = now.Now })
+	synctest.Test(t, func(t *testing.T) {
+		token := serviceAccountToken(t, workspaceUser, time.Now().Add(time.Hour))
+		reviews := &fakeTokenReviews{answers: map[string]authenticationv1.TokenReviewStatus{token: authenticatedAs(workspaceUser, machineAudience)}}
+		authenticator := machineAuthenticator(t, reviews)
 
-	headers := bearer(token)
-	headers.Set("X-User-Id", aliceEmail)
-	session, err := authenticator.Authenticate(t.Context(), headers, nil)
-	require.NoError(t, err)
-	machine, ok := session.(*MachineSession)
-	require.True(t, ok, "an admitted ServiceAccount yields a MachineSession, got %T", session)
-	require.Equal(t, workspaceUser, machine.Principal().User.ID)
-	require.Contains(t, machine.Principal().User.Groups, "system:serviceaccounts:agent-platform")
-	require.Equal(t, []string{machineAudience}, reviews.last.Spec.Audiences)
+		headers := bearer(token)
+		headers.Set("X-User-Id", aliceEmail)
+		session, err := authenticator.Authenticate(t.Context(), headers, nil)
+		require.NoError(t, err)
+		machine, ok := session.(*Session)
+		require.True(t, ok, "an admitted ServiceAccount yields a Session, got %T", session)
+		require.Equal(t, workspaceUser, machine.Principal().User.ID)
+		require.True(t, machine.Principal().User.Kubernetes)
+		require.Contains(t, machine.Principal().User.Groups, "system:serviceaccounts:agent-platform")
+		require.Equal(t, []string{machineAudience}, reviews.last.Spec.Audiences)
+		// Reviewed under the names the API server gave it, with no prefix.
+		user, groups, err := machine.ReviewedAs()
+		require.NoError(t, err)
+		require.Equal(t, workspaceUser, user)
+		require.Equal(t, []string{"system:authenticated", "system:serviceaccounts", "system:serviceaccounts:agent-platform"}, groups)
 
-	// Remembered for the TTL, then reviewed again.
-	_, err = authenticator.Authenticate(t.Context(), bearer(token), nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, reviews.count())
-	now.advance(DefaultReviewCacheTTL)
-	_, err = authenticator.Authenticate(t.Context(), bearer(token), nil)
-	require.NoError(t, err)
-	require.Equal(t, 2, reviews.count())
+		// Remembered for the TTL, then reviewed again.
+		_, err = authenticator.Authenticate(t.Context(), bearer(token), nil)
+		require.NoError(t, err)
+		require.Equal(t, 1, reviews.count())
+		time.Sleep(DefaultReviewCacheTTL + time.Millisecond)
+		_, err = authenticator.Authenticate(t.Context(), bearer(token), nil)
+		require.NoError(t, err)
+		require.Equal(t, 2, reviews.count())
+	})
 }
 
 func TestAuthenticateMachineRemembersNoLongerThanTheTokenLives(t *testing.T) {
-	issuer := newTestIssuer(t)
-	now := &clock{now: time.Now()}
-	token := serviceAccountToken(t, workspaceUser, now.Now().Add(2*time.Second))
-	reviews := &fakeTokenReviews{answers: map[string]authenticationv1.TokenReviewStatus{token: authenticatedAs(workspaceUser, machineAudience)}}
-	authenticator := newAuthenticator(t, issuer, reviews, func(c *Config) { c.Now = now.Now })
+	synctest.Test(t, func(t *testing.T) {
+		token := serviceAccountToken(t, workspaceUser, time.Now().Add(2*time.Second))
+		reviews := &fakeTokenReviews{answers: map[string]authenticationv1.TokenReviewStatus{token: authenticatedAs(workspaceUser, machineAudience)}}
+		authenticator := machineAuthenticator(t, reviews)
 
-	_, err := authenticator.Authenticate(t.Context(), bearer(token), nil)
-	require.NoError(t, err)
-	now.advance(2 * time.Second)
-	reviews.answers[token] = authenticationv1.TokenReviewStatus{Error: "token has expired"}
-	_, err = authenticator.Authenticate(t.Context(), bearer(token), nil)
-	require.ErrorIs(t, err, ErrUnauthenticated)
-	require.Equal(t, 2, reviews.count())
+		_, err := authenticator.Authenticate(t.Context(), bearer(token), nil)
+		require.NoError(t, err)
+		time.Sleep(2 * time.Second)
+		_, err = authenticator.Authenticate(t.Context(), bearer(token), nil)
+		require.ErrorIs(t, err, ErrUnauthenticated)
+		require.ErrorContains(t, err, "the ServiceAccount token expired")
+		require.Equal(t, 1, reviews.count())
+	})
+}
+
+// Concurrent calls with one new token send one TokenReview.
+func TestAuthenticateMachineSendsOneReviewForConcurrentCalls(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		token := serviceAccountToken(t, workspaceUser, time.Now().Add(time.Hour))
+		release := make(chan struct{})
+		reviews := &fakeTokenReviews{answers: map[string]authenticationv1.TokenReviewStatus{token: authenticatedAs(workspaceUser, machineAudience)}, wait: release}
+		authenticator := machineAuthenticator(t, reviews)
+
+		var group sync.WaitGroup
+		for range 5 {
+			group.Go(func() {
+				_, err := authenticator.Authenticate(t.Context(), bearer(token), nil)
+				require.NoError(t, err)
+			})
+		}
+		synctest.Wait()
+		close(release)
+		group.Wait()
+		require.Equal(t, 1, reviews.count())
+	})
 }
 
 func TestAuthenticateRefusesMachines(t *testing.T) {
@@ -489,14 +585,14 @@ func TestAuthenticateSessionReader(t *testing.T) {
 
 	session, err := authenticator.Authenticate(auth.AdmitSessionReader(t.Context()), bearer(token), nil)
 	require.NoError(t, err)
-	require.Equal(t, auth.SessionReaderSession{P: auth.Principal{User: auth.User{ID: readerUser, Groups: reviews.answers[token].User.Groups}}}, session)
+	require.Equal(t, auth.SessionReaderSession{P: auth.Principal{User: auth.User{ID: readerUser, Groups: reviews.answers[token].User.Groups, Kubernetes: true}}}, session)
 }
 
 func TestUpstreamAuth(t *testing.T) {
 	issuer := newTestIssuer(t)
 	authenticator := newAuthenticator(t, issuer, &fakeTokenReviews{}, nil)
-	person := &PersonSession{P: auth.Principal{User: auth.User{ID: aliceEmail}}, authHeader: "Bearer person"}
-	machine := &MachineSession{P: auth.Principal{User: auth.User{ID: workspaceUser}}, authHeader: "Bearer machine"}
+	person := &Session{principal: auth.Principal{User: auth.User{ID: aliceEmail}}, authHeader: "Bearer person"}
+	machine := &Session{principal: auth.Principal{User: auth.User{ID: workspaceUser}}, authHeader: "Bearer machine"}
 
 	for _, test := range []struct {
 		session            auth.Session

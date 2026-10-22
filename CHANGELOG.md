@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every flag can be set through a `KAGENT_EXTENSIONS_<FLAG>` environment variable.
 - An end-to-end test in `e2e/` that runs the binary as an installation's controller and proves its authentication and authorization over the controller's API port.
 
+### Changed
+
+- Machine `TokenReview` results are cached with `k8s.io/apiserver`'s token cache. Concurrent calls with the same token send one review, and an expired ServiceAccount token is refused without a review.
+- The authorizer caches at most 32768 decisions.
+
 ### Fixed
 
 - The end-to-end test releases the fields it wrote on the controller Deployment once it restores them, so the release that renders the Deployment owns them again.

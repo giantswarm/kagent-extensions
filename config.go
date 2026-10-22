@@ -116,6 +116,7 @@ func setFromEnvironment(flags *flag.FlagSet, lookup func(string) (string, bool))
 func (o options) authenticatorConfig() (authn.Config, error) {
 	config := authn.Config{
 		UsernameClaim: o.usernameClaim, GroupsClaim: o.groupsClaim,
+		UsernamePrefix: o.usernamePrefix, GroupsPrefix: o.groupsPrefix,
 		MachineAudience: o.machineAudience, ReviewCacheTTL: o.reviewCacheTTL,
 	}
 	if o.issuers == "" {
@@ -152,7 +153,6 @@ func (o options) authorizerConfig(watchNamespaces []string) (authz.Config, error
 		return authz.Config{}, fmt.Errorf("--namespace-selector %q: %w", o.namespaceSelector, err)
 	}
 	return authz.Config{
-		UsernamePrefix: o.usernamePrefix, GroupsPrefix: o.groupsPrefix,
 		Namespaces: watchNamespaces, NamespaceSelector: selector,
 		IncludedNamespaces: o.includeNamespaces, DecisionTTL: o.decisionTTL,
 	}, nil
