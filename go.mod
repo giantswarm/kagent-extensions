@@ -3,7 +3,7 @@ module github.com/giantswarm/kagent-extensions
 go 1.27.3
 
 require (
-	github.com/coreos/go-oidc/v3 v3.18.0
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/kagent-dev/kagent/go v0.0.0
 	github.com/stretchr/testify v1.12.1
