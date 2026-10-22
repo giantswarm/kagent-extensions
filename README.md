@@ -118,6 +118,7 @@ anyway, for a test of another release.
 | `app.Options{Authenticator, Authorizer}`, `auth.AuthProvider`, `auth.CollectionAuthorizer`, `auth.ControlPlaneSession` | upstream | | |
 | `auth.SessionReaderSession`, `auth.AdmitSessionReader`, `auth.ErrSessionReaderRefused` | fork only | `auth-admit-one-serviceaccount-to-read-any` | the session reader, and the tombstone read of a deleted Session |
 | `auth.ErrReviewUnavailable`, mapped to `Unavailable` by the controller's services | fork only | `auth-authorize-each-caller-against-kubernetes-rbac` | without it an unanswered review is a refusal; upstream maps every authorizer error to `PermissionDenied` |
+| `app.Options.ExtraMigrations`, `migrations.LineSources` | `ExtraMigrations` upstream, `LineSources` fork only | `api-add-reusable-egress-policies-for-agents` | the line's own migrations, which the fork's controller runs after the built-in ones; `TestOptionsFollowTheForkController` fails when the fork's controller sets an option this binary does not |
 | The Session service's `get` on the Agent before a new Session | fork only | `auth-authorize-each-caller-against-kubernetes-rbac` | upstream's form is kagent-dev/kagent#3299 |
 
 A re-pin that drops one of these rows breaks the build of this binary.

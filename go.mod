@@ -247,7 +247,7 @@ require (
 
 // The fork keeps upstream's module path, so the binary imports upstream's
 // packages by name and the replace swaps in the fork at a pinned commit.
-replace github.com/kagent-dev/kagent/go => github.com/giantswarm/kagent-upstream/go v0.0.0-20261022160333-e5785cca562a
+replace github.com/kagent-dev/kagent/go => github.com/giantswarm/kagent-upstream/go v0.0.0-20261022220600-cf82cf04b51c
 
 // A dependency's replace lines do not apply to the main module, so the fork's
 // own replace block is copied here and must follow it at every re-pin.

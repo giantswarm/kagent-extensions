@@ -12,6 +12,7 @@ import (
 	"github.com/kagent-dev/kagent/go/core/pkg/app"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
+	"github.com/kagent-dev/kagent/go/core/pkg/migrations"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
@@ -52,7 +53,19 @@ func run(ctx context.Context, arguments []string) error {
 	if err != nil {
 		return err
 	}
-	return app.Run(ctx, app.Options{Authenticator: authenticator, Authorizer: authorizer})
+	return app.Run(ctx, controllerOptions(authenticator, authorizer, env.DatabaseSchema.Get()))
+}
+
+// controllerOptions are the options the fork's own controller runs with, but
+// for the authenticator and authorizer: the line's migrations run after the
+// built-in ones in the controller's database schema, so a database migrated by
+// this binary is at the same version as one migrated by the fork's controller.
+func controllerOptions(authenticator auth.AuthProvider, authorizer auth.CollectionAuthorizer, schema string) app.Options {
+	return app.Options{
+		Authenticator:   authenticator,
+		Authorizer:      authorizer,
+		ExtraMigrations: migrations.LineSources(schema),
+	}
 }
 
 // build makes the controller's authenticator and authorizer from the flags,
