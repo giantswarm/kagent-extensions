@@ -43,6 +43,8 @@ func TestParseOptions(t *testing.T) {
 	require.Equal(t, []authn.Issuer{{URL: "https://dex.example.com", Audiences: []string{"oauth2-proxy", "backstage", "muster", "kagent-cli"}, JWKSURL: "http://dex.dex.svc:5557/keys"}}, authenticatorConfig.Issuers)
 	require.Equal(t, "email", authenticatorConfig.UsernameClaim)
 	require.Equal(t, "groups", authenticatorConfig.GroupsClaim)
+	require.Equal(t, "oidc:", authenticatorConfig.UsernamePrefix)
+	require.Equal(t, "oidc:", authenticatorConfig.GroupsPrefix)
 	require.Equal(t, "kagent", authenticatorConfig.MachineAudience)
 	require.Equal(t, []string{
 		"system:serviceaccount:agent-platform:workspace-manager",
@@ -54,8 +56,6 @@ func TestParseOptions(t *testing.T) {
 
 	authorizerConfig, err := o.authorizerConfig(nil)
 	require.NoError(t, err)
-	require.Equal(t, "oidc:", authorizerConfig.UsernamePrefix)
-	require.Equal(t, "oidc:", authorizerConfig.GroupsPrefix)
 	require.Equal(t, "giantswarm.io/organization", authorizerConfig.NamespaceSelector.String())
 	require.Equal(t, []string{"agent-platform"}, authorizerConfig.IncludedNamespaces)
 	require.Equal(t, authz.DefaultDecisionTTL, authorizerConfig.DecisionTTL)
