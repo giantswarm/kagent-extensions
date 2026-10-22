@@ -21,6 +21,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -50,6 +51,9 @@ const (
 	controllerPort  = 8083
 	rolloutTimeout  = 5 * time.Minute
 	logTailLines    = 200
+	// fieldManager owns the fields the suite writes on the controller
+	// Deployment until it releases them.
+	fieldManager = "kagent-extensions-e2e"
 )
 
 type client = ctrlclient.Object
@@ -192,7 +196,10 @@ func (e *environment) runBinary(t *testing.T, values map[string]string) {
 	for _, name := range slices.Sorted(maps.Keys(values)) {
 		env = append(env, corev1.EnvVar{Name: name, Value: values[name]})
 	}
-	t.Cleanup(func() { e.rollController(t, index, original.Image, original.Env) })
+	t.Cleanup(func() {
+		e.rollController(t, index, original.Image, original.Env)
+		e.releaseControllerFields(t)
+	})
 	e.rollController(t, index, e.image, env)
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -231,7 +238,7 @@ func (e *environment) rollController(t *testing.T, index int, image string, env 
 	require.NoError(t, err)
 	current.Spec.Template.Spec.Containers[index].Image = image
 	current.Spec.Template.Spec.Containers[index].Env = env
-	updated, err := deployments.Update(ctx, current, metav1.UpdateOptions{})
+	updated, err := deployments.Update(ctx, current, metav1.UpdateOptions{FieldManager: fieldManager})
 	require.NoError(t, err)
 	if updated.Generation == current.Generation {
 		return
@@ -255,6 +262,26 @@ func (e *environment) rollController(t *testing.T, index int, image string, env 
 		return true, nil
 	})
 	require.NoError(t, err, "the controller did not roll out on %s: %s", image, e.controllerPodProblems())
+}
+
+// releaseControllerFields drops the suite's entry from the controller
+// Deployment's managed fields once the image and environment are restored, so
+// the fields return to the release that renders them and nothing reads the
+// Deployment as patched outside its release.
+func (e *environment) releaseControllerFields(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	deployments := e.clientset.AppsV1().Deployments(e.namespace)
+	current, err := deployments.Get(ctx, e.controller.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	index := slices.IndexFunc(current.ManagedFields, func(entry metav1.ManagedFieldsEntry) bool { return entry.Manager == fieldManager })
+	if index == -1 {
+		return
+	}
+	patch := fmt.Sprintf(`[{"op":"test","path":"/metadata/managedFields/%d/manager","value":%q},{"op":"remove","path":"/metadata/managedFields/%d"}]`, index, fieldManager, index)
+	_, err = deployments.Patch(ctx, e.controller.Name, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+	require.NoError(t, err, "release the suite's fields on the controller Deployment")
 }
 
 // controllerPodProblems names why the controller's pods are not ready, for a
