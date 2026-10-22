@@ -82,12 +82,14 @@ selector.
 
 ## Seams it relies on
 
-| Seam | Where | |
-|---|---|---|
-| `app.Options{Authenticator, Authorizer}`, `auth.AuthProvider`, `auth.CollectionAuthorizer`, `auth.ControlPlaneSession` | upstream | |
-| `auth.SessionReaderSession`, `auth.AdmitSessionReader`, `auth.ErrSessionReaderRefused` | fork only | the session reader, and the tombstone read of a deleted Session |
-| `auth.ErrReviewUnavailable`, mapped to `Unavailable` by the controller's services | fork only | without it an unanswered review is a refusal |
-| The Session service's `get` on the Agent before a new Session | fork only | upstream's form is kagent-dev/kagent#3299 |
+| Seam | Where | Fork ledger row | |
+|---|---|---|---|
+| `app.Options{Authenticator, Authorizer}`, `auth.AuthProvider`, `auth.CollectionAuthorizer`, `auth.ControlPlaneSession` | upstream | | |
+| `auth.SessionReaderSession`, `auth.AdmitSessionReader`, `auth.ErrSessionReaderRefused` | fork only | `auth-admit-one-serviceaccount-to-read-any` | the session reader, and the tombstone read of a deleted Session |
+| `auth.ErrReviewUnavailable`, mapped to `Unavailable` by the controller's services | fork only | `auth-authorize-each-caller-against-kubernetes-rbac` | without it an unanswered review is a refusal; upstream maps every authorizer error to `PermissionDenied` |
+| The Session service's `get` on the Agent before a new Session | fork only | `auth-authorize-each-caller-against-kubernetes-rbac` | upstream's form is kagent-dev/kagent#3299 |
+
+A re-pin that drops one of these rows breaks the build of this binary.
 
 ## Pinning the fork
 
