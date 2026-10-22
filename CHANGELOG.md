@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The end-to-end test releases the fields it wrote on the controller Deployment once it restores them, so the release that renders the Deployment owns them again.
 - The image runs as the numeric user `1000:1000`, so a pod with `runAsNonRoot` and no `runAsUser` starts it.
 
 
