@@ -223,8 +223,8 @@ github.com/fxamacker/cbor/v2 v2.9.3/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj2
 github.com/gabriel-vasile/mimetype v1.4.3 h1:in2uUcidCuFcDKtdcBxlR0rJ1+fsokWf+uqxgUFjbI0=
 github.com/gabriel-vasile/mimetype v1.4.3/go.mod h1:d8uq/6HKRL6CGdk+aubisF/M5GcPfT7nKyLpA0lbSSk=
 github.com/ghodss/yaml v1.0.0/go.mod h1:4dBDuWmgqj2HViK6kFavaiC9ZROes6MMH2rRYeMEF04=
-github.com/giantswarm/kagent-upstream/go v0.0.0-20261022160333-e5785cca562a h1:5toGLjmEQSYvz3OxoizqApykQ/Osy2ITphoCLdoYmeo=
-github.com/giantswarm/kagent-upstream/go v0.0.0-20261022160333-e5785cca562a/go.mod h1:umWJgxy4LlTv4EapVgP1A8rp0THv9k9dbrbe2qvDXXY=
+github.com/giantswarm/kagent-upstream/go v0.0.0-20261022194833-7fc58bcbff9a h1:ppgjsVIAQxRp2y1yWPltzJOxcC1mlubs9gTzdDumg5A=
+github.com/giantswarm/kagent-upstream/go v0.0.0-20261022194833-7fc58bcbff9a/go.mod h1:umWJgxy4LlTv4EapVgP1A8rp0THv9k9dbrbe2qvDXXY=
 github.com/giantswarm/substrate v1.17.5 h1:Wr1KUgas3NO8Wsise/bNjF4V1nmFykx56fl/9uUK3zI=
 github.com/giantswarm/substrate v1.17.5/go.mod h1:gexN4eB+JuV9gv8PjnyuwLCD9EXQyRHUpGtIQucspG0=
 github.com/gin-contrib/sse v0.1.0 h1:Y/yl/+YNO8GZSjAhjMsSuLt29uWRFHdHYUb5lYOV9qE=
