@@ -1,0 +1,3 @@
+# Binaries built by `go build` and by the CI handoff (<binary>-<os>-<arch>).
+/kagent-extensions
+kagent-extensions-*
