@@ -297,6 +297,24 @@ func TestAuthenticatePersonAcceptsEveryAudienceOfItsIssuer(t *testing.T) {
 	require.IsType(t, &Session{}, session)
 }
 
+func TestAuthenticatePersonOfAnyClientOfAnIssuerWithoutAudiences(t *testing.T) {
+	issuer := newTestIssuer(t)
+	authenticator := newAuthenticator(t, issuer, nil, func(c *Config) {
+		c.Issuers[0].Audiences = nil
+		c.MachineCallers, c.SessionReader = nil, ""
+	})
+	claims := issuer.personClaims()
+	claims[audClaim] = "some-other-client"
+
+	session, err := authenticator.Authenticate(t.Context(), bearer(issuer.sign(t, claims)), nil)
+	require.NoError(t, err)
+	require.IsType(t, &Session{}, session)
+
+	claims[issClaim] = "https://evil.example.com"
+	_, err = authenticator.Authenticate(t.Context(), bearer(issuer.sign(t, claims)), nil)
+	require.ErrorContains(t, err, "is not trusted")
+}
+
 func TestAuthenticatePersonWithoutGroupsClaim(t *testing.T) {
 	issuer := newTestIssuer(t)
 	authenticator := newAuthenticator(t, issuer, &fakeTokenReviews{}, func(c *Config) { c.GroupsClaim = "" })
@@ -625,7 +643,6 @@ func TestNewRefusesConfigurations(t *testing.T) {
 		"username claim empty":         {change: func(c *Config) { c.UsernameClaim = "" }},
 		"negative review cache TTL":    {change: func(c *Config) { c.ReviewCacheTTL = -time.Second }},
 		"issuer without URL":           {change: func(c *Config) { c.Issuers[0].URL = "" }},
-		"issuer without audience":      {change: func(c *Config) { c.Issuers[0].Audiences = nil }},
 		"issuer with empty audience":   {change: func(c *Config) { c.Issuers[0].Audiences = []string{""} }},
 		"issuer twice":                 {change: func(c *Config) { c.Issuers = append(c.Issuers, c.Issuers[0]) }},
 		"machines without TokenReview": {change: func(*Config) {}, reviews: nil},

@@ -24,7 +24,7 @@ nothing.
 
 | Caller | Verified by | User | Groups |
 |---|---|---|---|
-| Person | Signature, issuer and expiry against one of `--oidc-issuers` (discovery and key set, or an in-cluster `jwksURL`); the token must name one of that issuer's audiences | `--oidc-username-claim` (an `email` must be verified) | `--oidc-groups-claim`, from the verified token only |
+| Person | Signature, issuer and expiry against one of `--oidc-issuers` (discovery and key set, or an in-cluster `jwksURL`); the token must name one of that issuer's audiences, if it lists any | `--oidc-username-claim` (an `email` must be verified) | `--oidc-groups-claim`, from the verified token only |
 | Machine | A `TokenReview` with `--machine-audience` in `spec.audiences`, cached for `--token-review-cache-ttl`; an expired token is refused without a review; the ServiceAccount must be a `--machine-caller` | `system:serviceaccount:<namespace>:<name>` | as the API server names them |
 | Session reader | As a machine, for `--session-reader` | as a machine | as a machine |
 
@@ -83,7 +83,7 @@ reads from the environment, as the upstream controller does.
 
 | Flag | Default | |
 |---|---|---|
-| `--oidc-issuers` | required | JSON list of `{"issuer", "audiences", "jwksURL"}` |
+| `--oidc-issuers` | required | JSON list of `{"issuer", "audiences", "jwksURL"}`; an issuer without `audiences` accepts a token of any of its clients |
 | `--oidc-username-claim` | `email` | |
 | `--oidc-groups-claim` | `groups` | empty gives people no groups |
 | `--oidc-username-prefix`, `--oidc-groups-prefix` | empty | as the API server's flags of the same names |

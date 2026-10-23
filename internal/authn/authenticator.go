@@ -127,6 +127,9 @@ func New(config Config, reviews TokenReviewer) (*Authenticator, error) {
 		if _, duplicate := a.people[issuer.URL]; duplicate {
 			return nil, fmt.Errorf("issuer %q is configured twice", issuer.URL)
 		}
+		if len(issuer.Audiences) == 0 {
+			slog.Warn("the issuer has no audiences: a token of any of its clients identifies a person", "issuer", issuer.URL)
+		}
 		a.people[issuer.URL] = newIssuerVerifier(issuer, config.HTTPClient, config.Now)
 	}
 	if machines {
