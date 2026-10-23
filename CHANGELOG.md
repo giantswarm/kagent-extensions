@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An issuer of `--oidc-issuers` without `audiences` accepts a token of any of its clients, as the kagent fork's controller does; the binary logs a warning at start.
 - The binary is built on fork release `v1.25.1`.
 - Machine `TokenReview` results are cached with `k8s.io/apiserver`'s token cache. Concurrent calls with the same token send one review, and an expired ServiceAccount token is refused without a review.
 - The authorizer caches at most 32768 decisions.
