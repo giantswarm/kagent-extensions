@@ -59,7 +59,7 @@ func (l *stringList) Set(value string) error {
 
 func parseOptions(flags *flag.FlagSet, arguments []string) (options, error) {
 	var o options
-	flags.StringVar(&o.issuers, "oidc-issuers", "", `People's OpenID Connect issuers, as a JSON list of {"issuer": URL, "audiences": [client IDs], "jwksURL": optional in-cluster key set URL, "emailDomainConnectors": optional {email domain: [Dex connector IDs]}}. A token must name one of its issuer's audiences; an issuer without audiences accepts a token of any of its clients. A token whose email is in a pinned domain must name one of its connectors in federated_claims.connector_id.`)
+	flags.StringVar(&o.issuers, "oidc-issuers", "", `People's OpenID Connect issuers, as a JSON list of {"issuer": URL, "audiences": [client IDs], "jwksURL": optional in-cluster key set URL, "claimValidationRules": optional [{"expression": CEL over claims, "message"}]}. A token must name one of its issuer's audiences; an issuer without audiences accepts a token of any of its clients. Every claim validation rule must be true of it, as the API server's AuthenticationConfiguration jwt[].claimValidationRules.`)
 	flags.StringVar(&o.usernameClaim, "oidc-username-claim", "email", "Claim a person's user ID is read from, as the API server's --oidc-username-claim.")
 	flags.StringVar(&o.groupsClaim, "oidc-groups-claim", "groups", "Claim a person's groups are read from, as the API server's --oidc-groups-claim. Empty gives people no groups.")
 	flags.StringVar(&o.usernamePrefix, "oidc-username-prefix", "", "Prefix put before a person's user ID in a review, as the API server's --oidc-username-prefix.")

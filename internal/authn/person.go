@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/google/cel-go/common/types"
+	authcel "k8s.io/apiserver/pkg/authentication/cel"
 )
 
 // Issuer is an OpenID Connect issuer whose tokens identify people, and the
@@ -22,12 +24,17 @@ type Issuer struct {
 	// JWKSURL, when set, is where the issuer's keys are read instead of the
 	// jwks_uri of its discovery document: an in-cluster address of the issuer.
 	JWKSURL string `json:"jwksURL,omitempty"`
-	// EmailDomainConnectors pins email domains to the Dex connectors that may
-	// assert them. A token whose email is in a listed domain is refused unless
-	// its federated_claims.connector_id is one of that domain's connectors, so
-	// no other connector of the issuer signs in as a person of the domain. An
-	// email in an unlisted domain is accepted from any connector.
-	EmailDomainConnectors map[string][]string `json:"emailDomainConnectors,omitempty"`
+	// ClaimValidationRules are CEL expressions over the token's claims that
+	// must all be true, as the expression form of the API server's
+	// AuthenticationConfiguration jwt[].claimValidationRules.
+	ClaimValidationRules []ClaimValidationRule `json:"claimValidationRules,omitempty"`
+}
+
+// ClaimValidationRule is a CEL expression over the variable claims, and the
+// reason a token for which it is false is refused.
+type ClaimValidationRule struct {
+	Expression string `json:"expression"`
+	Message    string `json:"message,omitempty"`
 }
 
 func (i Issuer) validate() error {
@@ -37,48 +44,45 @@ func (i Issuer) validate() error {
 	if slices.Contains(i.Audiences, "") {
 		return fmt.Errorf("issuer %q has an empty audience", i.URL)
 	}
-	seen := map[string]bool{}
-	for domain, connectors := range i.EmailDomainConnectors {
-		if domain == "" || strings.Contains(domain, "@") {
-			return fmt.Errorf("issuer %q pins the email domain %q, which is not a domain", i.URL, domain)
-		}
-		if seen[strings.ToLower(domain)] {
-			return fmt.Errorf("issuer %q pins the email domain %q twice", i.URL, domain)
-		}
-		seen[strings.ToLower(domain)] = true
-		if len(connectors) == 0 || slices.Contains(connectors, "") {
-			return fmt.Errorf("issuer %q pins the email domain %q to no connector", i.URL, domain)
-		}
-	}
 	return nil
 }
 
-// admitConnector refuses a token whose email is in a pinned domain and that
-// was not issued through one of that domain's connectors. Domains compare
-// without regard to case, as mail does.
-func (i Issuer) admitConnector(claims map[string]any) error {
-	if len(i.EmailDomainConnectors) == 0 {
+// compileClaimValidationRules compiles rules with the API server's own CEL
+// environment for claims, so an expression means here what it means there.
+func compileClaimValidationRules(rules []ClaimValidationRule) (authcel.ClaimsMapper, error) {
+	if len(rules) == 0 {
+		return nil, nil
+	}
+	compiler := authcel.NewDefaultCompiler()
+	compiled := make([]authcel.CompilationResult, 0, len(rules))
+	for _, rule := range rules {
+		result, err := compiler.CompileClaimsExpression(&authcel.ClaimValidationCondition{Expression: rule.Expression, Message: rule.Message})
+		if err != nil {
+			return nil, fmt.Errorf("claim validation rule %q: %w", rule.Expression, err)
+		}
+		compiled = append(compiled, result)
+	}
+	return authcel.NewClaimsMapper(compiled), nil
+}
+
+// validateClaims refuses claims for which a rule is false or fails to
+// evaluate, such as one that reads a claim the token does not carry.
+func validateClaims(ctx context.Context, rules authcel.ClaimsMapper, claims map[string]any) error {
+	if rules == nil {
 		return nil
 	}
-	email, _ := claims["email"].(string)
-	at := strings.LastIndex(email, "@")
-	if at < 0 {
-		return nil
+	results, err := rules.EvalClaimMappings(ctx, types.NewStringInterfaceMap(types.DefaultTypeAdapter, claims))
+	if err != nil {
+		return fmt.Errorf("evaluate the claim validation rules: %w", err)
 	}
-	domain := email[at+1:]
-	for pinned, connectors := range i.EmailDomainConnectors {
-		if !strings.EqualFold(pinned, domain) {
-			continue
+	for _, result := range results {
+		if result.EvalResult != types.True {
+			rule := result.ExpressionAccessor.(*authcel.ClaimValidationCondition)
+			if rule.Message != "" {
+				return fmt.Errorf("the token fails a claim validation rule: %s", rule.Message)
+			}
+			return fmt.Errorf("the token fails the claim validation rule %q", rule.Expression)
 		}
-		federated, _ := claims["federated_claims"].(map[string]any)
-		connector, _ := federated["connector_id"].(string)
-		if connector == "" {
-			return fmt.Errorf("the token's email is in %q but it names no connector (federated_claims.connector_id)", pinned)
-		}
-		if !slices.Contains(connectors, connector) {
-			return fmt.Errorf("the token's email is in %q, which connector %q may not assert", pinned, connector)
-		}
-		return nil
 	}
 	return nil
 }
@@ -98,6 +102,7 @@ const rediscoverAfter = 5 * time.Second
 // is unreachable and refuses people's calls until the issuer answers.
 type issuerVerifier struct {
 	issuer Issuer
+	rules  authcel.ClaimsMapper
 	client *http.Client
 	now    func() time.Time
 
@@ -107,12 +112,17 @@ type issuerVerifier struct {
 	lastFailed error
 }
 
-func newIssuerVerifier(issuer Issuer, client *http.Client, now func() time.Time) *issuerVerifier {
-	return &issuerVerifier{issuer: issuer, client: client, now: now}
+func newIssuerVerifier(issuer Issuer, client *http.Client, now func() time.Time) (*issuerVerifier, error) {
+	rules, err := compileClaimValidationRules(issuer.ClaimValidationRules)
+	if err != nil {
+		return nil, fmt.Errorf("issuer %q: %w", issuer.URL, err)
+	}
+	return &issuerVerifier{issuer: issuer, rules: rules, client: client, now: now}, nil
 }
 
 // verify returns the claims of a token the issuer signed, that has not
-// expired and that names one of the issuer's audiences, if it has any.
+// expired, that names one of the issuer's audiences, if it has any, and that
+// passes its claim validation rules.
 func (v *issuerVerifier) verify(ctx context.Context, raw string) (map[string]any, error) {
 	verifier, err := v.idTokenVerifier(ctx)
 	if err != nil {
@@ -128,6 +138,9 @@ func (v *issuerVerifier) verify(ctx context.Context, raw string) (map[string]any
 	claims := map[string]any{}
 	if err := token.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("decode the token's claims: %w", err)
+	}
+	if err := validateClaims(ctx, v.rules, claims); err != nil {
+		return nil, err
 	}
 	return claims, nil
 }

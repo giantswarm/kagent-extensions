@@ -130,7 +130,11 @@ func New(config Config, reviews TokenReviewer) (*Authenticator, error) {
 		if len(issuer.Audiences) == 0 {
 			slog.Warn("the issuer has no audiences: a token of any of its clients identifies a person", "issuer", issuer.URL)
 		}
-		a.people[issuer.URL] = newIssuerVerifier(issuer, config.HTTPClient, config.Now)
+		verifier, err := newIssuerVerifier(issuer, config.HTTPClient, config.Now)
+		if err != nil {
+			return nil, err
+		}
+		a.people[issuer.URL] = verifier
 	}
 	if machines {
 		a.machines = newMachineAuthenticator(reviews, config.MachineAudience, config.ReviewCacheTTL)
@@ -178,9 +182,6 @@ func (a *Authenticator) authenticate(ctx context.Context, headers http.Header) (
 func (a *Authenticator) person(ctx context.Context, issuer *issuerVerifier, token, authHeader string) (auth.Session, error) {
 	claims, err := issuer.verify(ctx, token)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrUnauthenticated, err)
-	}
-	if err := issuer.issuer.admitConnector(claims); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnauthenticated, err)
 	}
 	userID, _ := claims[a.mapping.usernameClaim].(string)

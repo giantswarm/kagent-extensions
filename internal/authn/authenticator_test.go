@@ -414,13 +414,15 @@ func TestAuthenticateRefusesPeople(t *testing.T) {
 	}
 }
 
-// An email in a pinned domain is accepted only from that domain's connectors,
-// so another connector of the same issuer that asserts it, verified or not,
-// does not sign in as its owner.
-func TestAuthenticatePinsEmailDomainsToConnectors(t *testing.T) {
+// staffConnectorRule accepts an email of example.com only from the staff
+// connectors, so another connector of the same issuer that asserts one does
+// not sign in as its owner.
+const staffConnectorRule = `!claims.email.lowerAscii().endsWith('@example.com') || (has(claims.federated_claims) && claims.federated_claims.connector_id in ['` + staffConnector + `', 'staff-github'])`
+
+func TestAuthenticateAppliesClaimValidationRules(t *testing.T) {
 	issuer := newTestIssuer(t)
 	authenticator := newAuthenticator(t, issuer, &fakeTokenReviews{}, func(c *Config) {
-		c.Issuers[0].EmailDomainConnectors = map[string][]string{"Example.com": {staffConnector, "staff-github"}}
+		c.Issuers[0].ClaimValidationRules = []ClaimValidationRule{{Expression: staffConnectorRule, Message: "example.com is asserted by the staff connectors only"}}
 	})
 	for name, test := range map[string]struct {
 		email   string
@@ -429,14 +431,14 @@ func TestAuthenticatePinsEmailDomainsToConnectors(t *testing.T) {
 	}{
 		"staff connector":                    {email: aliceEmail, claims: federatedClaims(staffConnector)},
 		"second staff connector":             {email: aliceEmail, claims: federatedClaims("staff-github")},
-		"domain in another case":             {email: "alice@EXAMPLE.com", claims: federatedClaims(staffConnector)},
 		"unpinned domain from any connector": {email: "bob@customer.example.org", claims: federatedClaims("customer-entra")},
 		"unpinned domain without connector":  {email: "bob@customer.example.org"},
-		"another connector":                  {email: aliceEmail, claims: federatedClaims("customer-entra"), refusal: `connector "customer-entra" may not assert`},
-		"no federated claims":                {email: aliceEmail, refusal: "names no connector"},
-		"federated claims without connector": {email: aliceEmail, claims: map[string]any{"user_id": "alice"}, refusal: "names no connector"},
-		"connector not a string":             {email: aliceEmail, claims: map[string]any{"connector_id": 7}, refusal: "names no connector"},
-		"federated claims not an object":     {email: aliceEmail, claims: staffConnector, refusal: "names no connector"},
+		"another connector":                  {email: aliceEmail, claims: federatedClaims("customer-entra"), refusal: "example.com is asserted by the staff connectors only"},
+		"domain in another case":             {email: "alice@EXAMPLE.com", claims: federatedClaims("customer-entra"), refusal: "example.com is asserted by the staff connectors only"},
+		"no federated claims":                {email: aliceEmail, refusal: "example.com is asserted by the staff connectors only"},
+		"federated claims without connector": {email: aliceEmail, claims: map[string]any{"user_id": "alice"}, refusal: "evaluate the claim validation rules"},
+		"connector not a string":             {email: aliceEmail, claims: map[string]any{"connector_id": 7}, refusal: "example.com is asserted by the staff connectors only"},
+		"federated claims not an object":     {email: aliceEmail, claims: staffConnector, refusal: "evaluate the claim validation rules"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			claims := issuer.personClaims()
@@ -457,19 +459,16 @@ func TestAuthenticatePinsEmailDomainsToConnectors(t *testing.T) {
 	}
 }
 
-// The pin reads the email claim whichever claim the user ID is read from.
-func TestAuthenticatePinsEmailDomainsUnderAnotherUsernameClaim(t *testing.T) {
+// A rule without a message is named by its expression.
+func TestAuthenticateNamesARuleWithoutMessage(t *testing.T) {
 	issuer := newTestIssuer(t)
 	authenticator := newAuthenticator(t, issuer, &fakeTokenReviews{}, func(c *Config) {
-		c.UsernameClaim = subClaim
-		c.Issuers[0].EmailDomainConnectors = map[string][]string{"example.com": {staffConnector}}
+		c.Issuers[0].ClaimValidationRules = []ClaimValidationRule{{Expression: "claims.sub == 'bob'"}}
 	})
-	claims := issuer.personClaims()
-	claims["federated_claims"] = federatedClaims("customer-entra")
 
-	_, err := authenticator.Authenticate(t.Context(), bearer(issuer.sign(t, claims)), nil)
+	_, err := authenticator.Authenticate(t.Context(), bearer(issuer.sign(t, issuer.personClaims())), nil)
 	require.ErrorIs(t, err, ErrUnauthenticated)
-	require.ErrorContains(t, err, `connector "customer-entra" may not assert`)
+	require.ErrorContains(t, err, `rule "claims.sub == 'bob'"`)
 }
 
 func federatedClaims(connector string) map[string]any {
@@ -717,20 +716,11 @@ func TestNewRefusesConfigurations(t *testing.T) {
 		"session reader also a machine caller": {change: func(c *Config) {
 			c.MachineCallers = append(c.MachineCallers, readerUser)
 		}},
-		"email domain pinned to no connector": {change: func(c *Config) {
-			c.Issuers[0].EmailDomainConnectors = map[string][]string{"example.com": nil}
+		"claim validation rule that does not compile": {change: func(c *Config) {
+			c.Issuers[0].ClaimValidationRules = []ClaimValidationRule{{Expression: "claims.email =="}}
 		}},
-		"email domain pinned to an empty connector": {change: func(c *Config) {
-			c.Issuers[0].EmailDomainConnectors = map[string][]string{"example.com": {""}}
-		}},
-		"empty email domain pinned": {change: func(c *Config) {
-			c.Issuers[0].EmailDomainConnectors = map[string][]string{"": {staffConnector}}
-		}},
-		"email address pinned as a domain": {change: func(c *Config) {
-			c.Issuers[0].EmailDomainConnectors = map[string][]string{aliceEmail: {staffConnector}}
-		}},
-		"email domain pinned twice": {change: func(c *Config) {
-			c.Issuers[0].EmailDomainConnectors = map[string][]string{"example.com": {staffConnector}, "Example.COM": {"other"}}
+		"claim validation rule that is not a boolean": {change: func(c *Config) {
+			c.Issuers[0].ClaimValidationRules = []ClaimValidationRule{{Expression: "claims.email"}}
 		}},
 	}
 	for name, test := range tests {
