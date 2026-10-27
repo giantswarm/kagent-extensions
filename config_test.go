@@ -61,6 +61,15 @@ func TestParseOptions(t *testing.T) {
 	require.Equal(t, authz.DefaultDecisionTTL, authorizerConfig.DecisionTTL)
 }
 
+func TestParseOptionsPinsEmailDomainsToConnectors(t *testing.T) {
+	o, err := parse(t, issuersFlag, `[{"issuer":"https://dex.example.com","audiences":["backstage"],"emailDomainConnectors":{"giantswarm.io":["giantswarm-ad","giantswarm-github"]}}]`)
+	require.NoError(t, err)
+
+	authenticatorConfig, err := o.authenticatorConfig()
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"giantswarm.io": {"giantswarm-ad", "giantswarm-github"}}, authenticatorConfig.Issuers[0].EmailDomainConnectors)
+}
+
 func TestParseOptionsFromTheEnvironment(t *testing.T) {
 	t.Setenv("KAGENT_EXTENSIONS_OIDC_ISSUERS", issuers)
 	t.Setenv("KAGENT_EXTENSIONS_MACHINE_CALLER", "agent-platform/workspace-manager,agent-platform/agent-manager")

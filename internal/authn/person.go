@@ -22,6 +22,12 @@ type Issuer struct {
 	// JWKSURL, when set, is where the issuer's keys are read instead of the
 	// jwks_uri of its discovery document: an in-cluster address of the issuer.
 	JWKSURL string `json:"jwksURL,omitempty"`
+	// EmailDomainConnectors pins email domains to the Dex connectors that may
+	// assert them. A token whose email is in a listed domain is refused unless
+	// its federated_claims.connector_id is one of that domain's connectors, so
+	// no other connector of the issuer signs in as a person of the domain. An
+	// email in an unlisted domain is accepted from any connector.
+	EmailDomainConnectors map[string][]string `json:"emailDomainConnectors,omitempty"`
 }
 
 func (i Issuer) validate() error {
@@ -30,6 +36,49 @@ func (i Issuer) validate() error {
 	}
 	if slices.Contains(i.Audiences, "") {
 		return fmt.Errorf("issuer %q has an empty audience", i.URL)
+	}
+	seen := map[string]bool{}
+	for domain, connectors := range i.EmailDomainConnectors {
+		if domain == "" || strings.Contains(domain, "@") {
+			return fmt.Errorf("issuer %q pins the email domain %q, which is not a domain", i.URL, domain)
+		}
+		if seen[strings.ToLower(domain)] {
+			return fmt.Errorf("issuer %q pins the email domain %q twice", i.URL, domain)
+		}
+		seen[strings.ToLower(domain)] = true
+		if len(connectors) == 0 || slices.Contains(connectors, "") {
+			return fmt.Errorf("issuer %q pins the email domain %q to no connector", i.URL, domain)
+		}
+	}
+	return nil
+}
+
+// admitConnector refuses a token whose email is in a pinned domain and that
+// was not issued through one of that domain's connectors. Domains compare
+// without regard to case, as mail does.
+func (i Issuer) admitConnector(claims map[string]any) error {
+	if len(i.EmailDomainConnectors) == 0 {
+		return nil
+	}
+	email, _ := claims["email"].(string)
+	at := strings.LastIndex(email, "@")
+	if at < 0 {
+		return nil
+	}
+	domain := email[at+1:]
+	for pinned, connectors := range i.EmailDomainConnectors {
+		if !strings.EqualFold(pinned, domain) {
+			continue
+		}
+		federated, _ := claims["federated_claims"].(map[string]any)
+		connector, _ := federated["connector_id"].(string)
+		if connector == "" {
+			return fmt.Errorf("the token's email is in %q but it names no connector (federated_claims.connector_id)", pinned)
+		}
+		if !slices.Contains(connectors, connector) {
+			return fmt.Errorf("the token's email is in %q, which connector %q may not assert", pinned, connector)
+		}
+		return nil
 	}
 	return nil
 }

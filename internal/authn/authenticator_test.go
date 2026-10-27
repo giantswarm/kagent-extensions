@@ -37,6 +37,7 @@ const (
 	expClaim        = "exp"
 	adminsGroup     = "admins"
 	noBearerReason  = "no bearer token"
+	staffConnector  = "staff-ad"
 )
 
 // testIssuer is an OpenID Connect issuer served over HTTP: discovery and keys.
@@ -413,6 +414,68 @@ func TestAuthenticateRefusesPeople(t *testing.T) {
 	}
 }
 
+// An email in a pinned domain is accepted only from that domain's connectors,
+// so another connector of the same issuer that asserts it, verified or not,
+// does not sign in as its owner.
+func TestAuthenticatePinsEmailDomainsToConnectors(t *testing.T) {
+	issuer := newTestIssuer(t)
+	authenticator := newAuthenticator(t, issuer, &fakeTokenReviews{}, func(c *Config) {
+		c.Issuers[0].EmailDomainConnectors = map[string][]string{"Example.com": {staffConnector, "staff-github"}}
+	})
+	for name, test := range map[string]struct {
+		email   string
+		claims  any
+		refusal string
+	}{
+		"staff connector":                    {email: aliceEmail, claims: federatedClaims(staffConnector)},
+		"second staff connector":             {email: aliceEmail, claims: federatedClaims("staff-github")},
+		"domain in another case":             {email: "alice@EXAMPLE.com", claims: federatedClaims(staffConnector)},
+		"unpinned domain from any connector": {email: "bob@customer.example.org", claims: federatedClaims("customer-entra")},
+		"unpinned domain without connector":  {email: "bob@customer.example.org"},
+		"another connector":                  {email: aliceEmail, claims: federatedClaims("customer-entra"), refusal: `connector "customer-entra" may not assert`},
+		"no federated claims":                {email: aliceEmail, refusal: "names no connector"},
+		"federated claims without connector": {email: aliceEmail, claims: map[string]any{"user_id": "alice"}, refusal: "names no connector"},
+		"connector not a string":             {email: aliceEmail, claims: map[string]any{"connector_id": 7}, refusal: "names no connector"},
+		"federated claims not an object":     {email: aliceEmail, claims: staffConnector, refusal: "names no connector"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			claims := issuer.personClaims()
+			claims[emailClaim] = test.email
+			if test.claims != nil {
+				claims["federated_claims"] = test.claims
+			}
+			session, err := authenticator.Authenticate(t.Context(), bearer(issuer.sign(t, claims)), nil)
+			if test.refusal == "" {
+				require.NoError(t, err)
+				require.Equal(t, test.email, session.Principal().User.ID)
+				return
+			}
+			require.ErrorIs(t, err, ErrUnauthenticated)
+			require.ErrorContains(t, err, test.refusal)
+			require.Nil(t, session)
+		})
+	}
+}
+
+// The pin reads the email claim whichever claim the user ID is read from.
+func TestAuthenticatePinsEmailDomainsUnderAnotherUsernameClaim(t *testing.T) {
+	issuer := newTestIssuer(t)
+	authenticator := newAuthenticator(t, issuer, &fakeTokenReviews{}, func(c *Config) {
+		c.UsernameClaim = subClaim
+		c.Issuers[0].EmailDomainConnectors = map[string][]string{"example.com": {staffConnector}}
+	})
+	claims := issuer.personClaims()
+	claims["federated_claims"] = federatedClaims("customer-entra")
+
+	_, err := authenticator.Authenticate(t.Context(), bearer(issuer.sign(t, claims)), nil)
+	require.ErrorIs(t, err, ErrUnauthenticated)
+	require.ErrorContains(t, err, `connector "customer-entra" may not assert`)
+}
+
+func federatedClaims(connector string) map[string]any {
+	return map[string]any{"connector_id": connector, "user_id": "CgVhbGljZQ"}
+}
+
 func TestAuthenticateReadsAGroupsClaimString(t *testing.T) {
 	issuer := newTestIssuer(t)
 	authenticator := newAuthenticator(t, issuer, &fakeTokenReviews{}, nil)
@@ -653,6 +716,21 @@ func TestNewRefusesConfigurations(t *testing.T) {
 		"session reader not a ServiceAccount": {change: func(c *Config) { c.SessionReader = "agent-platform/klaus-gateway" }},
 		"session reader also a machine caller": {change: func(c *Config) {
 			c.MachineCallers = append(c.MachineCallers, readerUser)
+		}},
+		"email domain pinned to no connector": {change: func(c *Config) {
+			c.Issuers[0].EmailDomainConnectors = map[string][]string{"example.com": nil}
+		}},
+		"email domain pinned to an empty connector": {change: func(c *Config) {
+			c.Issuers[0].EmailDomainConnectors = map[string][]string{"example.com": {""}}
+		}},
+		"empty email domain pinned": {change: func(c *Config) {
+			c.Issuers[0].EmailDomainConnectors = map[string][]string{"": {staffConnector}}
+		}},
+		"email address pinned as a domain": {change: func(c *Config) {
+			c.Issuers[0].EmailDomainConnectors = map[string][]string{aliceEmail: {staffConnector}}
+		}},
+		"email domain pinned twice": {change: func(c *Config) {
+			c.Issuers[0].EmailDomainConnectors = map[string][]string{"example.com": {staffConnector}, "Example.COM": {"other"}}
 		}},
 	}
 	for name, test := range tests {

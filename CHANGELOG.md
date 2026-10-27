@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An issuer of `--oidc-issuers` can pin email domains to the Dex connectors that may assert them (`emailDomainConnectors`); a token whose email is in a pinned domain and whose `federated_claims.connector_id` is another connector, or missing, is refused.
 - The binary runs the fork line's own database migrations after the built-in ones, in the controller's schema (`KAGENT_POSTGRES_DATABASE_SCHEMA`), as the fork's controller does.
 - `renovate.json5` extends `renovate-custom.json5`, so Renovate leaves the fork pin, `github.com/coreos/go-oidc/v3` and the `k8s.io` modules alone; the pin is the commit of fork release `v1.24.6` again and go-oidc the fork's `v3.18.0`.
 - The end-to-end test releases the fields it wrote on the controller Deployment once it restores them, so the release that renders the Deployment owns them again.

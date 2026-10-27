@@ -31,6 +31,17 @@ nothing.
 Any other token is refused: a token of another issuer, an unsigned token, and
 a Substrate actor JWT among them.
 
+An issuer's `emailDomainConnectors` pins email domains to the Dex connectors
+that may assert them, for example
+`{"giantswarm.io": ["giantswarm-ad", "giantswarm-github"]}`. A token whose
+`email` is in a pinned domain (compared without regard to case) is refused
+unless its `federated_claims.connector_id` is one of that domain's connectors;
+a token without `federated_claims` is refused too, so every client whose
+tokens reach the controller must request Dex's `federated:id` scope. Without
+the pin, any connector of the issuer whose upstream asserts a verified
+`alice@giantswarm.io` signs in as that person. An email in an unpinned domain
+is accepted from any connector.
+
 Machine `TokenReview` results are cached with the API server's own token cache
 (`k8s.io/apiserver/pkg/authentication/token/cache`). Calls that arrive at the
 same time with the same token send one `TokenReview`. Failed reviews are not
@@ -83,7 +94,7 @@ reads from the environment, as the upstream controller does.
 
 | Flag | Default | |
 |---|---|---|
-| `--oidc-issuers` | required | JSON list of `{"issuer", "audiences", "jwksURL"}`; an issuer without `audiences` accepts a token of any of its clients |
+| `--oidc-issuers` | required | JSON list of `{"issuer", "audiences", "jwksURL", "emailDomainConnectors"}`; an issuer without `audiences` accepts a token of any of its clients |
 | `--oidc-username-claim` | `email` | |
 | `--oidc-groups-claim` | `groups` | empty gives people no groups |
 | `--oidc-username-prefix`, `--oidc-groups-prefix` | empty | as the API server's flags of the same names |

@@ -180,6 +180,9 @@ func (a *Authenticator) person(ctx context.Context, issuer *issuerVerifier, toke
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnauthenticated, err)
 	}
+	if err := issuer.issuer.admitConnector(claims); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUnauthenticated, err)
+	}
 	userID, _ := claims[a.mapping.usernameClaim].(string)
 	if userID == "" {
 		return nil, fmt.Errorf("%w: the token has no %q claim", ErrUnauthenticated, a.mapping.usernameClaim)
