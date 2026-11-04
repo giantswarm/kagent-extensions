@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An authorizer that reviews every call with a `SubjectAccessReview` and scopes a collection read per namespace (`--authorization-mode`, `--namespace-selector`, `--include-namespace`).
 - Every flag can be set through a `KAGENT_EXTENSIONS_<FLAG>` environment variable.
 - An end-to-end test in `e2e/` that runs the binary as an installation's controller and proves its authentication and authorization over the controller's API port.
+- A caller with a cluster-wide `delete` on `sessions.api.kagent.dev` may delete a Session that another caller created, once the kagent fork release the binary is built on asks for that review. A caller without that rule is refused with a message that names `delete`.
 
 ### Changed
 

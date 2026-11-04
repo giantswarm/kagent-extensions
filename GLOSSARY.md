@@ -27,8 +27,9 @@ the authorizer, such as `Agent` or `Checkpoint`.
 
 **Rule**: how calls on one resource type are checked, in
 `internal/authz/rules.go`. A type is checked as the Kubernetes object it is,
-as a create when a new one is made (a Session), as a cluster-wide list (every
-creator's Sessions), or not at all when it is owner-scoped.
+as a create when a new one is made (a Session), cluster-wide (every creator's
+Sessions: a list of them, or a delete of one the caller did not create), or not
+at all when it is owner-scoped.
 
 **Owner-scoped**: a resource type with no Kubernetes object behind it. Its
 service only returns the caller's own rows and rows shared with them, so the
