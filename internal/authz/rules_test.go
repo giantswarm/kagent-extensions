@@ -118,6 +118,7 @@ func TestRuleCheck(t *testing.T) {
 		{sessionType, auth.VerbCreate, auth.Resource{Namespace: orgACME, Name: sessionID}, review{}, false},
 		{sessionType, auth.VerbGet, auth.Resource{Name: sessionID}, review{}, false},
 		{allCreatorsType, auth.VerbGet, auth.Resource{Namespace: orgACME, Name: sessionID}, review{auth.VerbList, sessionsResource, "", ""}, true},
+		{allCreatorsType, auth.VerbList, auth.Resource{}, review{auth.VerbList, sessionsResource, "", ""}, true},
 		{checkpointType, auth.VerbCreate, auth.Resource{Name: sessionID}, review{}, false},
 	}
 	for _, test := range tests {

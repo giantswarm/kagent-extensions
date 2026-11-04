@@ -62,7 +62,10 @@ Every check is a `SubjectAccessReview`:
   `sessions.api.kagent.dev`. To delete a Session that another caller
   created, a caller needs a cluster-wide `delete` on
   `sessions.api.kagent.dev`. Without it, the delete is refused with a message
-  that names the verb. A caller's own Sessions need neither.
+  that names the verb. A caller's own Sessions need neither. The kagent fork
+  release the binary is built on (`FORK_VERSION`) must ask for this review:
+  an older release answers NotFound for another caller's Session, whatever
+  RBAC grants.
 - The session reader may `get` a Session by ID, if RBAC grants it `get` on
   `sessions.api.kagent.dev`, and do nothing else.
 - Some records have no Kubernetes object behind them: an existing Session, a
