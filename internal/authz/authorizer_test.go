@@ -33,6 +33,7 @@ const (
 	agentsResource       = "agents"
 	listVerb             = string(auth.VerbList)
 	getVerb              = string(auth.VerbGet)
+	deleteVerb           = string(auth.VerbDelete)
 	orgGlobex            = "org-globex"
 	serviceAccountsGroup = "system:serviceaccounts"
 	agentName            = "triage"
@@ -228,6 +229,34 @@ func TestCheckAllCreatorsIsAClusterWideList(t *testing.T) {
 	require.ErrorContains(t, err, "may not list sessions.api.kagent.dev")
 }
 
+// The Session service asks a delete of a Session the caller did not create as
+// SessionAllCreators. It needs a cluster-wide delete on sessions: a cluster-wide
+// list, which the all-creators read needs, or a delete in one namespace does not
+// admit it, and the refusal names the verb.
+func TestCheckAllCreatorsDeleteIsAClusterWideDelete(t *testing.T) {
+	const eraserUser = "system:serviceaccount:agent-platform:organization-eraser"
+	eraser := reviewedSession{p: auth.Principal{User: auth.User{ID: eraserUser, Kubernetes: true}}, user: eraserUser, groups: []string{authenticatedGroup}}
+	reviews := &fakeReviews{grants: []grant{
+		{subject: eraserUser, verb: listVerb, resource: sessionsResourceName},
+		{subject: eraserUser, verb: deleteVerb, resource: sessionsResourceName},
+		{subject: machineUser, verb: listVerb, resource: sessionsResourceName},
+		{subject: orgACMEReviewed, verb: deleteVerb, resource: sessionsResourceName, namespace: orgACME},
+	}}
+	authorizer := newAuthorizer(t, reviews, nil, nil)
+	deleteOther := func(session reviewedSession) error {
+		return authorizer.Check(as(t.Context(), session), session.p, auth.VerbDelete, auth.Resource{Type: allCreatorsType, Name: sessionID})
+	}
+
+	require.NoError(t, deleteOther(eraser))
+	sent := reviews.sent()
+	require.Len(t, sent, 1)
+	require.Equal(t, &authorizationv1.ResourceAttributes{Group: apiGroup, Resource: sessionsResourceName, Verb: deleteVerb}, sent[0].ResourceAttributes)
+
+	require.ErrorContains(t, deleteOther(machine()), machineUser+" may not delete sessions.api.kagent.dev: no rule")
+	alice := person(orgACMEReviewed)
+	require.ErrorContains(t, deleteOther(alice), aliceReviewed+" may not delete sessions.api.kagent.dev: no rule")
+}
+
 // A new Session needs get on its Agent and create on sessions in the Agent's
 // namespace: the two checks the controller's Session service makes.
 func TestCheckSessionCreate(t *testing.T) {
@@ -262,6 +291,7 @@ func TestCheckLeavesOwnerScopedRecordsToTheirService(t *testing.T) {
 	}{
 		{auth.VerbGet, auth.Resource{Type: sessionType, Name: sessionID}},
 		{auth.VerbUpdate, auth.Resource{Type: sessionType, Name: sessionID}},
+		{auth.VerbDelete, auth.Resource{Type: sessionType, Name: sessionID}},
 		{auth.VerbGet, auth.Resource{Type: sessionType}},
 		{auth.VerbCreate, auth.Resource{Type: checkpointType}},
 		{auth.VerbList, auth.Resource{Type: "ScheduledRun"}},

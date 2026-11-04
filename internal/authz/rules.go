@@ -31,8 +31,9 @@ type rule struct {
 	// not yet named, in the namespace it is created in. Every other operation
 	// is owner-scoped.
 	created schema.GroupResource
-	// clusterWide is reviewed as a cluster-wide list for every operation, and
-	// a collection read is empty.
+	// clusterWide is reviewed cluster-wide for every operation: a read (get
+	// or list) as a list, any other operation as itself. A collection read is
+	// empty.
 	clusterWide schema.GroupResource
 }
 
@@ -50,12 +51,13 @@ var rules = map[string]rule{
 	"PromptTemplate": {object: schema.GroupResource{Group: corev1.GroupName, Resource: "configmaps"}},
 
 	// A new Session is created in its Agent's namespace; once it exists, a
-	// write on it (a turn, a checkpoint) stays with the owner or share that
-	// the Session service resolves.
+	// write on it (a turn, a checkpoint, a delete) stays with the owner or
+	// share that the Session service resolves.
 	sessionType: {created: sessionsResource},
-	// Every creator's Sessions span every tenant, so they are reviewed as a
-	// cluster-wide list of the sessions resource, which a person is normally
-	// not granted.
+	// Every creator's Sessions span every tenant: listing them is reviewed as
+	// a cluster-wide list of the sessions resource, and deleting one the
+	// caller did not create as a cluster-wide delete. A person is normally
+	// granted neither.
 	"SessionAllCreators": {clusterWide: sessionsResource},
 
 	"Checkpoint":   {},
@@ -89,7 +91,10 @@ func ruleOf(resourceType string) (rule, error) {
 func (r rule) check(verb auth.Verb, resource auth.Resource) (review, bool) {
 	switch {
 	case !r.clusterWide.Empty():
-		return review{verb: auth.VerbList, resource: r.clusterWide}, true
+		if verb == auth.VerbGet {
+			verb = auth.VerbList
+		}
+		return review{verb: verb, resource: r.clusterWide}, true
 	case !r.object.Empty():
 		return review{verb: verb, resource: r.object, namespace: resource.Namespace, name: resource.Name}, true
 	case !r.created.Empty() && verb == auth.VerbCreate && resource.Name == "":

@@ -59,7 +59,10 @@ Every check is a `SubjectAccessReview`:
 - A new Session needs `get` on its Agent and `create` on
   `sessions.api.kagent.dev` in the Agent's namespace. Every creator's
   Sessions (`all_creators`) need a cluster-wide `list` on
-  `sessions.api.kagent.dev`.
+  `sessions.api.kagent.dev`. To delete a Session that another caller
+  created, a caller needs a cluster-wide `delete` on
+  `sessions.api.kagent.dev`. Without it, the delete is refused with a message
+  that names the verb. A caller's own Sessions need neither.
 - The session reader may `get` a Session by ID, if RBAC grants it `get` on
   `sessions.api.kagent.dev`, and do nothing else.
 - Some records have no Kubernetes object behind them: an existing Session, a
