@@ -169,11 +169,12 @@ installation of the same release.
 
 The `E2E` GitHub Actions workflow runs the suite on every pull request and on
 `main`, in a Kind cluster that runs a published release of the kagent fork
-(`KAGENT_RELEASE` in `.github/workflows/e2e.yaml`): its chart, its Substrate,
-an Agent of its own, and the release's `controller-extensions` image as the
-binary. That image is this binary built against the release's tree from the
-commit the release names, so the workflow tests this checkout's test code
-against a published binary, not this checkout's binary.
+(`KAGENT_RELEASE` in `.github/workflows/e2e.yaml`): its chart, its Substrate
+and an Agent of its own. The binary under test is this checkout's, built
+against that release's tree as the fork builds its `controller-extensions`
+image (`go/extensions.Dockerfile`), packed with this repository's
+`Dockerfile` and loaded into the Kind cluster. A change under `internal/` is
+therefore tested on its own pull request.
 
 ## Pinning the fork
 
