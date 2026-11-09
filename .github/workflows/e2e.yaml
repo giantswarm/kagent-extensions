@@ -33,6 +33,11 @@ jobs:
   authorization:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    defaults:
+      run:
+        # An explicit bash runs each step with -eo pipefail: a command that
+        # fails before a pipe (go test | tee, make | tee) fails its step.
+        shell: bash
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -161,10 +166,12 @@ jobs:
       - name: Print the cluster's state
         if: failure()
         run: |
-          kubectl get pods -A
+          # Each command prints what it can; one that fails does not hide the
+          # others.
+          kubectl get pods -A || true
           kubectl get agents,agenttemplates,harnesses -n kagent -o wide || true
           kubectl describe agent smoke -n kagent || true
-          kubectl get events -n kagent --sort-by=.lastTimestamp | tail -100
+          kubectl get events -n kagent --sort-by=.lastTimestamp | tail -100 || true
           kubectl logs -n kagent deployment/kagent-controller --tail=300 || true
           kubectl logs -n ate-system -l app --all-containers --prefix --tail=200 || true
           kubectl logs -n kagent -l ate.dev/worker-pool --all-containers --prefix --tail=200 || true
