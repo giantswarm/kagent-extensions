@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -43,6 +44,9 @@ const (
 	// people's key set in the cluster.
 	issuerImageEnv     = "KAGENT_E2E_ISSUER_IMAGE"
 	defaultIssuerImage = "gsoci.azurecr.io/giantswarm/busybox:1.37.0"
+	// agentEnv names a ready Agent, <namespace>/<name>, that people start
+	// Sessions on; the tests that need a Session skip without it.
+	agentEnv = "KAGENT_E2E_AGENT"
 
 	issuerName      = "e2e-extensions-issuer"
 	kagentGroup     = "api.kagent.dev"
@@ -69,6 +73,8 @@ type environment struct {
 	controller               *appsv1.Deployment
 	controllerServiceAccount string
 	image                    string
+	// agent is the Agent of agentEnv, nil without it.
+	agent *apiv1alpha1.ResourceReference
 }
 
 func newEnvironment(t *testing.T) *environment {
@@ -95,7 +101,20 @@ func newEnvironment(t *testing.T) *environment {
 		restConfig: restConfig, clientset: clientset, kube: kube, namespace: namespace,
 		tenant:     "e2e-extensions-" + rand.String(5),
 		controller: controller, controllerServiceAccount: controller.Spec.Template.Spec.ServiceAccountName, image: image,
+		agent: agentOf(t),
 	}
+}
+
+// agentOf is the Agent agentEnv names, nil when it is not set.
+func agentOf(t *testing.T) *apiv1alpha1.ResourceReference {
+	t.Helper()
+	value := os.Getenv(agentEnv)
+	if value == "" {
+		return nil
+	}
+	namespace, name, ok := strings.Cut(value, "/")
+	require.True(t, ok && namespace != "" && name != "", "%s=%q is not <namespace>/<name>", agentEnv, value)
+	return &apiv1alpha1.ResourceReference{Namespace: namespace, Name: name}
 }
 
 func issuerImage() string {

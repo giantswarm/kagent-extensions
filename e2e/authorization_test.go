@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/ptr"
 )
 
@@ -40,10 +41,16 @@ const (
 	boundUser   = "e2e@example.com"
 	unboundUser = "e2e-stranger@example.com"
 	boundGroup  = "e2e-authorization-team"
+	// creatorUser starts Sessions on the Agent of agentEnv and is granted no
+	// delete of sessions anywhere.
+	creatorUser = "e2e-creator@example.com"
 
 	machineAccount  = "e2e-machine"
 	strangerAccount = "e2e-stranger"
 	readerAccount   = "e2e-reader"
+	// deleterAccount is a machine caller bound to a cluster-wide delete of
+	// sessions, and to nothing else.
+	deleterAccount = "e2e-session-deleter"
 
 	// absentAgent is an Agent nobody created. A call refused on it is refused
 	// by authorization; one admitted fails later, on the missing Agent.
@@ -52,7 +59,12 @@ const (
 	verbCreate = "create"
 	verbGet    = "get"
 	verbList   = "list"
+	verbDelete = "delete"
 	keysName   = "keys"
+
+	// anotherCreatorsRefusal is the session service's answer to a delete of
+	// another creator's Session that the authorizer refuses.
+	anotherCreatorsRefusal = "Not authorized to delete another creator's Session"
 )
 
 // TestAuthorization runs the controller as the binary and proves, over the
@@ -65,7 +77,11 @@ const (
 //   - a ServiceAccount is admitted only with a token for the controller's
 //     audience and only when it is allowlisted, and is reviewed under its own
 //     name;
-//   - the session reader may get a Session by ID and nothing else.
+//   - the session reader may get a Session by ID and nothing else;
+//   - a Session another caller created is deleted only by a caller RBAC
+//     grants a cluster-wide delete of sessions: a ServiceAccount granted the
+//     cluster-wide list alone, and another person, are refused, and a person
+//     deletes their own with no grant. This needs a ready Agent (agentEnv).
 //
 // It rolls the controller twice, so it stays sequential.
 func TestAuthorization(t *testing.T) {
@@ -75,7 +91,7 @@ func TestAuthorization(t *testing.T) {
 	env.grantFixtures(t)
 	env.runBinary(t, map[string]string{
 		"KAGENT_EXTENSIONS_OIDC_ISSUERS":     issuersFlag(t, keysURL),
-		"KAGENT_EXTENSIONS_MACHINE_CALLER":   env.namespace + "/" + machineAccount,
+		"KAGENT_EXTENSIONS_MACHINE_CALLER":   env.namespace + "/" + machineAccount + "," + env.namespace + "/" + deleterAccount,
 		"KAGENT_EXTENSIONS_SESSION_READER":   env.namespace + "/" + readerAccount,
 		"KAGENT_EXTENSIONS_MACHINE_AUDIENCE": machineAudience,
 		// The authenticator names why it refused a caller at debug level.
@@ -180,6 +196,120 @@ func TestAuthorization(t *testing.T) {
 		_, err = harnesses.ListHarnesses(ctx, &apiv1alpha1.ListHarnessesRequest{Namespace: env.namespace})
 		require.Equal(t, codes.PermissionDenied, status.Code(err), "ListHarnesses() error = %v", err)
 	})
+
+	t.Run("the delete of another creator's Session", func(t *testing.T) {
+		if env.agent == nil {
+			t.Skip(agentEnv + " is not set: there is no Agent to start Sessions on")
+		}
+		creator := person(creatorUser)
+		machine := func(account string) context.Context {
+			return withBearer(t.Context(), env.serviceAccountToken(t, account, machineAudience))
+		}
+		// exists answers GetSession of id as its creator.
+		exists := func(id string) codes.Code {
+			ctx, cancel := context.WithTimeout(creator, time.Minute)
+			defer cancel()
+			_, err := sessions.GetSession(ctx, &apiv1alpha1.GetSessionRequest{SessionId: id})
+			return status.Code(err)
+		}
+		erased := env.startSession(t, sessions, signer, creatorUser)
+		listed := env.startSession(t, sessions, signer, creatorUser)
+		owned := env.startSession(t, sessions, signer, creatorUser)
+
+		t.Run("a ServiceAccount granted a cluster-wide delete deletes it", func(t *testing.T) {
+			require.NoError(t, deleteSession(machine(deleterAccount), sessions, erased))
+			require.Equal(t, codes.NotFound, exists(erased), "the Session outlived its delete")
+		})
+
+		t.Run("a ServiceAccount granted a cluster-wide list only is refused", func(t *testing.T) {
+			ctx := machine(machineAccount)
+			// The grant is in effect: the ServiceAccount lists the Session.
+			require.Contains(t, allCreatorsSessions(t, ctx, sessions, env.agent), listed, "the all-creators list lacks the Session")
+			err := deleteSession(ctx, sessions, listed)
+			require.Equal(t, codes.PermissionDenied, status.Code(err), "DeleteSession() error = %v", err)
+			require.Equal(t, anotherCreatorsRefusal, status.Convert(err).Message())
+			require.Equal(t, codes.OK, exists(listed), "the refused delete removed the Session")
+		})
+
+		t.Run("a person deletes only their own", func(t *testing.T) {
+			err := deleteSession(person(unboundUser), sessions, owned)
+			require.Equal(t, codes.PermissionDenied, status.Code(err), "DeleteSession() error = %v", err)
+			require.Equal(t, anotherCreatorsRefusal, status.Convert(err).Message())
+			require.Equal(t, codes.OK, exists(owned), "the refused delete removed the Session")
+			require.NoError(t, deleteSession(creator, sessions, owned))
+			require.Equal(t, codes.NotFound, exists(owned), "the Session outlived its delete")
+		})
+	})
+}
+
+// startSession starts a Session on the Agent of agentEnv as the person email
+// and deletes it as them when the test ends, if it is still there.
+func (e *environment) startSession(t *testing.T, sessions apiv1alpha1.SessionServiceClient, signer *tokenSigner, email string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(withBearer(t.Context(), signer.sign(t, signer.personClaims(email))), 4*time.Minute)
+	defer cancel()
+	request := &apiv1alpha1.CreateSessionRequest{Agent: e.agent, RequestId: uuid.NewString()}
+	var created *apiv1alpha1.CreateSessionResponse
+	err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		var err error
+		created, err = sessions.CreateSession(ctx, request)
+		// FailedPrecondition: the Agent has no ready revision yet.
+		// Unavailable: the Session's runtime did not converge yet.
+		if code := status.Code(err); code == codes.FailedPrecondition || code == codes.Unavailable {
+			return false, nil
+		}
+		return err == nil, err
+	})
+	require.NoError(t, err, "CreateSession() on %s/%s", e.agent.GetNamespace(), e.agent.GetName())
+	id := created.GetSession().GetId()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(withBearer(context.Background(), signer.sign(t, signer.personClaims(email))), 2*time.Minute)
+		defer cancel()
+		if err := deleteSession(ctx, sessions, id); err != nil && status.Code(err) != codes.NotFound {
+			t.Errorf("delete Session %s: %v", id, err)
+		}
+	})
+	return id
+}
+
+// deleteSession deletes the Session id once no lifecycle work owns it: it
+// retries FailedPrecondition (a start or a suspend in flight) and Aborted (a
+// concurrent change) for up to a minute and returns any other answer.
+func deleteSession(ctx context.Context, sessions apiv1alpha1.SessionServiceClient, id string) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	for {
+		_, err := sessions.DeleteSession(ctx, &apiv1alpha1.DeleteSessionRequest{SessionId: id})
+		if code := status.Code(err); code != codes.FailedPrecondition && code != codes.Aborted {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w while lifecycle work owned the Session: %w", ctx.Err(), err)
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// allCreatorsSessions is the IDs of every creator's Sessions on agent.
+func allCreatorsSessions(t *testing.T, ctx context.Context, sessions apiv1alpha1.SessionServiceClient, agent *apiv1alpha1.ResourceReference) []string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	var ids []string
+	page := &apiv1alpha1.PageRequest{}
+	for {
+		response, err := sessions.ListSessions(ctx, &apiv1alpha1.ListSessionsRequest{AllCreators: true, Agent: agent, Page: page})
+		require.NoError(t, err)
+		for _, session := range response.GetSessions() {
+			ids = append(ids, session.GetId())
+		}
+		next := response.GetPage().GetNextPageToken()
+		if next == "" {
+			return ids
+		}
+		page = &apiv1alpha1.PageRequest{PageToken: next}
+	}
 }
 
 func issuersFlag(t *testing.T, keysURL string) string {
@@ -264,7 +394,8 @@ func (e *environment) serviceAccountToken(t *testing.T, serviceAccount, audience
 // bound person and group may list the Harnesses of the controller's namespace
 // and start Sessions in a tenant namespace of the test's own, where no binding
 // of the installation applies; the machine may list every creator's Sessions;
-// the session reader may get a Session.
+// the session reader may get a Session; the deleter may delete every
+// creator's Sessions; the creator may start Sessions on the Agent of agentEnv.
 func (e *environment) grantFixtures(t *testing.T) {
 	t.Helper()
 	sessionsResource := "sessions"
@@ -294,6 +425,18 @@ func (e *environment) grantFixtures(t *testing.T) {
 		clusterRoleBinding("e2e-extensions-machine", rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: machineAccount, Namespace: e.namespace}),
 		clusterRole("e2e-extensions-reader", rbacv1.PolicyRule{APIGroups: []string{kagentGroup}, Resources: []string{sessionsResource}, Verbs: []string{verbGet}}),
 		clusterRoleBinding("e2e-extensions-reader", rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: readerAccount, Namespace: e.namespace}),
+		serviceAccount(deleterAccount),
+		clusterRole("e2e-extensions-deleter", rbacv1.PolicyRule{APIGroups: []string{kagentGroup}, Resources: []string{sessionsResource}, Verbs: []string{verbDelete}}),
+		clusterRoleBinding("e2e-extensions-deleter", rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: deleterAccount, Namespace: e.namespace}),
+	}
+	if e.agent != nil {
+		objects = append(objects,
+			role("e2e-extensions-creator", e.agent.GetNamespace(),
+				rbacv1.PolicyRule{APIGroups: []string{kagentGroup}, Resources: []string{"agents"}, Verbs: []string{verbGet}},
+				rbacv1.PolicyRule{APIGroups: []string{kagentGroup}, Resources: []string{sessionsResource}, Verbs: []string{verbCreate}},
+			),
+			roleBinding("e2e-extensions-creator", e.agent.GetNamespace(), rbacv1.Subject{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: creatorUser}),
+		)
 	}
 	for _, object := range objects {
 		e.create(t, object)

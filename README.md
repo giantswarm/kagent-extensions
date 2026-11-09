@@ -142,7 +142,11 @@ directly, through a port-forward of its own:
   Harness roster and whether a Session starts;
 - a ServiceAccount is admitted only with a token for the controller's audience
   and only from the allowlist;
-- the session reader may get a Session and nothing else.
+- the session reader may get a Session and nothing else;
+- a Session another caller created is deleted only by a caller RBAC grants a
+  cluster-wide `delete` on `sessions.api.kagent.dev`: a ServiceAccount
+  granted the cluster-wide `list` alone, and another person, are refused, and
+  a person deletes their own with no grant.
 
 It creates its RBAC, ServiceAccounts, a namespace and a pod that serves the test
 issuer's keys, and removes them and restores the controller afterwards. The
@@ -156,11 +160,20 @@ KAGENT_E2E_IMAGE=gsoci.azurecr.io/giantswarm/kagent-extensions:<version> \
 
 `KAGENT_E2E_NAMESPACE` names the controller's namespace (default `kagent`),
 `KAGENT_E2E_ISSUER_IMAGE` an image with busybox's `httpd` (default
-`gsoci.azurecr.io/giantswarm/busybox:1.37.0`). Without `KAGENT_E2E_IMAGE` the
-suite skips.
+`gsoci.azurecr.io/giantswarm/busybox:1.37.0`), `KAGENT_E2E_AGENT` a ready
+Agent, `<namespace>/<name>`, that the test starts Sessions on; the delete cases
+skip without it. Without `KAGENT_E2E_IMAGE` the suite skips.
 The binary stops under a kagent chart of another release than the one it is
 built on (see "The kagent chart's release"); run the suite against an
 installation of the same release.
+
+The `E2E` GitHub Actions workflow runs the suite on every pull request and on
+`main`, in a Kind cluster that runs a published release of the kagent fork
+(`KAGENT_RELEASE` in `.github/workflows/e2e.yaml`): its chart, its Substrate,
+an Agent of its own, and the release's `controller-extensions` image as the
+binary. That image is this binary built against the release's tree from the
+commit the release names, so the workflow tests this checkout's test code
+against a published binary, not this checkout's binary.
 
 ## Pinning the fork
 
