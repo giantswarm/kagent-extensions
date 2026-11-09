@@ -1,0 +1,177 @@
+name: E2E
+
+# Runs e2e/TestAuthorization in a Kind cluster against a published release of
+# the kagent fork (giantswarm/kagent-upstream): its kagent chart, its Substrate
+# and its controller-extensions image, which is this binary built against that
+# release's tree from the kagent-extensions commit the release names
+# (go/kagent-extensions.commit). The test code is this checkout's; the binary
+# under test is the published one, not this checkout's.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The fork release the cluster runs. It is not FORK_VERSION: the binary
+  # under test is the release's own controller-extensions image, which runs
+  # only under the kagent chart of the same release. The release must ask
+  # the authorizer about a delete of another creator's Session (1.31.1-rc.3
+  # and later).
+  KAGENT_RELEASE: 1.31.1-rc.6
+  KAGENT_REGISTRY: gsoci.azurecr.io/giantswarm/kagent
+  KIND_CLUSTER_NAME: kagent
+
+jobs:
+  authorization:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        # An explicit bash runs each step with -eo pipefail: a command that
+        # fails before a pipe (go test | tee, make | tee) fails its step.
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout the fork release
+        # Its Kind setup, its kagent CLI (the installer), its development
+        # PostgreSQL and its Substrate pin.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: giantswarm/kagent-upstream
+          ref: v${{ env.KAGENT_RELEASE }}
+          path: kagent-upstream
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            kagent-upstream/go/go.sum
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.18.0
+      - name: Install Kind
+        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          version: v0.33.0
+          install_only: true
+      - name: Allow unprivileged user namespaces
+        # Ubuntu 24.04 restricts them through AppArmor; the gVisor workers
+        # need them.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Resolve the Substrate pin
+        working-directory: kagent-upstream
+        run: |
+          make -s substrate-pin | tee -a "$GITHUB_ENV"
+          registry=$(make -s substrate-pin | sed -n 's|^SUBSTRATE_REPO=oci://||p')
+          echo "SUBSTRATE_IMAGE_REGISTRY=${registry%/helm}" | tee -a "$GITHUB_ENV"
+      - name: Pull Docker Hub images through mirror.gcr.io
+        # The Kind node and registry images, under the names the fork's Kind
+        # setup runs, so the runner's shared IP never meets Docker Hub's limit.
+        working-directory: kagent-upstream
+        run: |
+          kind_version=$(make -s --eval 'print-%: ; @echo $($*)' print-KIND_IMAGE_VERSION)
+          echo "KIND_IMAGE_VERSION=${kind_version}" | tee -a "$GITHUB_ENV"
+          for image in library/registry:2 "kindest/node:v${kind_version}"; do
+            docker pull "mirror.gcr.io/${image}"
+            docker tag "mirror.gcr.io/${image}" "${image#library/}"
+          done
+      - name: Create Kind cluster
+        working-directory: kagent-upstream
+        env:
+          # The script prefers podman when it is installed, as it is on the
+          # runner; under podman the worker pods get no cpuset or io
+          # controller, which gVisor needs. The fork's Makefile passes docker.
+          CONTAINER_RUNTIME: docker
+        run: bash scripts/kind/setup-kind.sh
+      - name: Build the kagent CLI of the release
+        working-directory: kagent-upstream/go
+        run: CGO_ENABLED=0 go build -ldflags "-X github.com/kagent-dev/kagent/go/core/internal/version.Version=${KAGENT_RELEASE}" -o "$RUNNER_TEMP/kagent" ./core/cli/cmd/kagent
+      - name: Install kagent
+        env:
+          OPENAI_API_KEY: fake
+          # Docker Hub's image, through its public cache.
+          KAGENT_BUNDLED_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:18-alpine
+          KAGENT_HELM_REPO: oci://${{ env.KAGENT_REGISTRY }}/helm/
+          KAGENT_HELM_VERSION: ${{ env.KAGENT_RELEASE }}
+          KAGENT_HELM_EXTRA_ARGS: >-
+            --set ui.replicas=0
+            --set kmcp.enabled=false
+            --set kagent-tools.enabled=false
+            --set grafana-mcp.enabled=false
+            --set substrateWorkerPool.create=true
+            --set substrateWorkerPool.replicas=4
+            --set substrateWorkerPool.sandboxClass=gvisor
+            --set substrateWorkerPool.workerImage=${{ env.SUBSTRATE_IMAGE_REGISTRY }}/ateom-gvisor:${{ env.SUBSTRATE_VERSION }}
+            --set harness.create=true
+            --set harness.snapshotLocation=gs://ate-snapshots/kagent/
+            --set database.postgres.role=
+          KAGENT_SUBSTRATE_HELM_EXTRA_ARGS: >-
+            --set ateApi.extraArgs[0]=--template-resync-interval=250ms
+        run: |
+          # The line's Substrate signs no certificates for the CLI's bundled PostgreSQL.
+          bash kagent-upstream/scripts/fork/dev-postgres.sh kagent
+          KAGENT_SUBSTRATE_HELM_REPO="${SUBSTRATE_REPO}/" KAGENT_SUBSTRATE_HELM_VERSION="${SUBSTRATE_VERSION}" \
+            "$RUNNER_TEMP/kagent" install --namespace kagent --skip-database-setup
+          kubectl rollout status deployment/kagent-controller -n kagent --timeout=5m
+      - name: Start an Agent people start Sessions on
+        run: |
+          kubectl apply -f - <<'EOF'
+          apiVersion: api.kagent.dev/v1alpha3
+          kind: AgentTemplate
+          metadata:
+            name: smoke
+            namespace: kagent
+          spec:
+            description: The Agent e2e/TestAuthorization starts Sessions on
+            modelConfig:
+              name: default-model-config
+            systemPrompt: Reply briefly.
+          ---
+          apiVersion: api.kagent.dev/v1alpha3
+          kind: Agent
+          metadata:
+            name: smoke
+            namespace: kagent
+          spec:
+            templateRef:
+              name: smoke
+            harnessRef:
+              name: kagent
+          EOF
+          kubectl wait agent/smoke -n kagent --for=condition=Ready --timeout=10m
+      - name: Run e2e/TestAuthorization
+        env:
+          KAGENT_E2E_IMAGE: ${{ env.KAGENT_REGISTRY }}/controller-extensions:${{ env.KAGENT_RELEASE }}
+          KAGENT_E2E_AGENT: kagent/smoke
+        run: |
+          go test ./e2e/ -run '^TestAuthorization$' -v -count=1 -timeout 20m 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+          # A case that skipped here proves nothing: the job sets everything
+          # the suite needs.
+          if grep -- '--- SKIP' "$RUNNER_TEMP/e2e.log"; then
+            echo "::error::a case of TestAuthorization skipped"
+            exit 1
+          fi
+      - name: Print the cluster's state
+        if: failure()
+        run: |
+          # Each command prints what it can; one that fails does not hide the
+          # others.
+          kubectl get pods -A || true
+          kubectl get agents,agenttemplates,harnesses -n kagent -o wide || true
+          kubectl describe agent smoke -n kagent || true
+          kubectl get events -n kagent --sort-by=.lastTimestamp | tail -100 || true
+          kubectl logs -n kagent deployment/kagent-controller --tail=300 || true
+          kubectl logs -n ate-system -l app --all-containers --prefix --tail=200 || true
+          kubectl logs -n kagent -l ate.dev/worker-pool --all-containers --prefix --tail=200 || true
