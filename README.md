@@ -169,11 +169,14 @@ installation of the same release.
 
 The `E2E` GitHub Actions workflow runs the suite on every pull request and on
 `main`, in a Kind cluster that runs a published release of the kagent fork
-(`KAGENT_RELEASE` in `.github/workflows/e2e.yaml`): its chart, its Substrate,
-an Agent of its own, and the release's `controller-extensions` image as the
-binary. That image is this binary built against the release's tree from the
-commit the release names, so the workflow tests this checkout's test code
-against a published binary, not this checkout's binary.
+(`KAGENT_RELEASE` in `.github/workflows/e2e.yaml`): its chart, its Substrate
+and an Agent of its own. The binary under test is this checkout's, built
+against that release's tree as the fork builds its `controller-extensions`
+image (`go/extensions.Dockerfile`), packed with this repository's
+`Dockerfile` and loaded into the Kind cluster. A change under `internal/` is
+therefore tested on its own pull request. The image is not the fork's
+published `controller-extensions` image: that image has another base, user and
+entrypoint (`go/extensions.Dockerfile`), and the workflow does not run it.
 
 ## Pinning the fork
 
@@ -198,11 +201,11 @@ against a published binary, not this checkout's binary.
 4. **Keep the dependencies the fork builds with.** A module the fork already
    requires (`github.com/coreos/go-oidc/v3`, `k8s.io/apiserver`, for example)
    stays at the fork's version.
-5. **Move the e2e release.** `KAGENT_RELEASE` in `.github/workflows/e2e.yaml`
-   names the fork release whose `controller-extensions` image the `E2E`
-   workflow runs. Move it to the newest fork release whose
-   `go/kagent-extensions.commit` contains every behaviour `e2e/` tests: a
-   test of a behaviour the image lacks fails the workflow until then.
+5. **Check the e2e release.** `KAGENT_RELEASE` in `.github/workflows/e2e.yaml`
+   names the fork release the `E2E` workflow builds this checkout against and
+   runs the cluster on. It must ask the authorizer about a delete of another
+   creator's Session (`1.31.1-rc.3` and later), and it must not be older than
+   the release in `FORK_VERSION` (`TestE2EReleaseIsNotOlderThanForkVersion`).
 6. **Follow the fork's resource types.** `TestRulesFollowTheFork` compares
    `internal/authz/rules.go` with the tables in the fork's own authorizer
    (`core/pkg/auth/kubernetes.go`) at the pinned commit. If the fork added,

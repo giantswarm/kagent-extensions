@@ -1,11 +1,10 @@
 name: E2E
 
 # Runs e2e/TestAuthorization in a Kind cluster against a published release of
-# the kagent fork (giantswarm/kagent-upstream): its kagent chart, its Substrate
-# and its controller-extensions image, which is this binary built against that
-# release's tree from the kagent-extensions commit the release names
-# (go/kagent-extensions.commit). The test code is this checkout's; the binary
-# under test is the published one, not this checkout's.
+# the kagent fork (giantswarm/kagent-upstream): its kagent chart and its
+# Substrate. The binary under test is this checkout's, built against that
+# release's tree as the fork builds its controller-extensions image
+# (go/extensions.Dockerfile), and packed with this repository's Dockerfile.
 on:
   pull_request:
   push:
@@ -20,14 +19,18 @@ permissions:
   contents: read
 
 env:
-  # The fork release the cluster runs. It is not FORK_VERSION: the binary
-  # under test is the release's own controller-extensions image, which runs
-  # only under the kagent chart of the same release. The release must ask
-  # the authorizer about a delete of another creator's Session (1.31.1-rc.3
-  # and later).
+  # The fork release the cluster runs, and the tree the binary under test is
+  # built against. It is not FORK_VERSION: the binary runs only under the
+  # kagent chart of the release it is built on, and the release must ask the
+  # authorizer about a delete of another creator's Session (1.31.1-rc.3 and
+  # later); FORK_VERSION is older. TestE2EReleaseIsNotOlderThanForkVersion
+  # fails when it is older than FORK_VERSION.
   KAGENT_RELEASE: 1.31.1-rc.6
   KAGENT_REGISTRY: gsoci.azurecr.io/giantswarm/kagent
   KIND_CLUSTER_NAME: kagent
+  # The image the job builds from this checkout and loads into the Kind
+  # cluster; the chart's controller pulls only an image it does not have.
+  E2E_IMAGE: kagent-extensions:e2e
 
 jobs:
   authorization:
@@ -66,6 +69,43 @@ jobs:
         with:
           version: v0.33.0
           install_only: true
+      - name: Build the binary of this checkout against the release's tree
+        # As the RUN line of go/extensions.Dockerfile at the release's tag
+        # does (keep the two in step): this module builds
+        # against the release's go module with the release's own replace lines
+        # (a dependency's replace lines do not apply to the main module), and
+        # FORK_VERSION names the release, which the binary checks the chart's
+        # IMAGE_TAG against at start. The test code then compiles against the
+        # same tree.
+        run: |
+          if grep -q '^replace (' kagent-upstream/go/go.mod; then
+            echo "::error::the release's go.mod has a replace block, which this step does not copy"
+            exit 1
+          fi
+          go mod edit -replace "github.com/kagent-dev/kagent/go=${GITHUB_WORKSPACE}/kagent-upstream/go"
+          { grep '^replace ' kagent-upstream/go/go.mod || true; } | while read -r _ old _ new version; do
+            go mod edit -replace "${old}=${new}@${version}"
+          done
+          printf '%s %.12s\n' "$KAGENT_RELEASE" "$(git -C kagent-upstream rev-parse HEAD)" > FORK_VERSION
+          for attempt in 1 2 3; do
+            go mod tidy && break
+            [ "$attempt" -lt 3 ] || exit 1
+            echo "go mod tidy failed (attempt $attempt of 3), retrying in 5s"
+            sleep 5
+          done
+          # The Dockerfile's own build line. The Makefile's build targets
+          # compile main.go alone, not the package.
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o kagent-extensions-linux-amd64 .
+      - name: Build the image of this checkout
+        # The repository's Dockerfile, as CircleCI builds it: the binary
+        # comes from the build context as kagent-extensions-<os>-<arch>. It is
+        # not the runtime of the fork's published controller-extensions image
+        # (go/extensions.Dockerfile: another base, user and entrypoint).
+        run: |
+          context="$RUNNER_TEMP/image"
+          mkdir -p "$context"
+          cp kagent-extensions-linux-amd64 "$context/"
+          docker build --platform linux/amd64 -f Dockerfile -t "$E2E_IMAGE" "$context"
       - name: Allow unprivileged user namespaces
         # Ubuntu 24.04 restricts them through AppArmor; the gVisor workers
         # need them.
@@ -95,6 +135,8 @@ jobs:
           # controller, which gVisor needs. The fork's Makefile passes docker.
           CONTAINER_RUNTIME: docker
         run: bash scripts/kind/setup-kind.sh
+      - name: Load the image of this checkout into the Kind cluster
+        run: kind load docker-image "$E2E_IMAGE" --name "$KIND_CLUSTER_NAME"
       - name: Build the kagent CLI of the release
         working-directory: kagent-upstream/go
         run: CGO_ENABLED=0 go build -ldflags "-X github.com/kagent-dev/kagent/go/core/internal/version.Version=${KAGENT_RELEASE}" -o "$RUNNER_TEMP/kagent" ./core/cli/cmd/kagent
@@ -153,7 +195,7 @@ jobs:
           kubectl wait agent/smoke -n kagent --for=condition=Ready --timeout=10m
       - name: Run e2e/TestAuthorization
         env:
-          KAGENT_E2E_IMAGE: ${{ env.KAGENT_REGISTRY }}/controller-extensions:${{ env.KAGENT_RELEASE }}
+          KAGENT_E2E_IMAGE: ${{ env.E2E_IMAGE }}
           KAGENT_E2E_AGENT: kagent/smoke
         run: |
           go test ./e2e/ -run '^TestAuthorization$' -v -count=1 -timeout 20m 2>&1 | tee "$RUNNER_TEMP/e2e.log"

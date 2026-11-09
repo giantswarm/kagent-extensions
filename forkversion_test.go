@@ -2,11 +2,13 @@ package main
 
 import (
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
+	"golang.org/x/mod/semver"
 )
 
 const forkModule = "github.com/kagent-dev/kagent/go"
@@ -30,6 +32,25 @@ func TestForkVersionMatchesGoMod(t *testing.T) {
 	revision, err := module.PseudoVersionRev(pinned)
 	require.NoError(t, err)
 	require.Equal(t, revision, fork.commit, "FORK_VERSION names the commit go.mod pins")
+}
+
+// e2eRelease is the fork release the E2E workflow builds the checkout against.
+var e2eRelease = regexp.MustCompile(`(?m)^\s*KAGENT_RELEASE:\s*(\S+)\s*$`)
+
+// The E2E workflow must not test the checkout against an older fork tree
+// than the one it is built on. Until FORK_VERSION is on the 1.31.1 line,
+// the two cannot be equal: older releases lack the cross-creator delete review.
+func TestE2EReleaseIsNotOlderThanForkVersion(t *testing.T) {
+	fork, err := parseForkVersion(forkVersionFile)
+	require.NoError(t, err)
+	workflow, err := os.ReadFile(".github/workflows/e2e.yaml")
+	require.NoError(t, err)
+	match := e2eRelease.FindSubmatch(workflow)
+	require.NotNil(t, match, "e2e.yaml sets KAGENT_RELEASE")
+	e2e, forkVersion := "v"+string(match[1]), "v"+fork.version
+	require.True(t, semver.IsValid(e2e), "KAGENT_RELEASE %s is a semantic version", match[1])
+	require.True(t, semver.IsValid(forkVersion), "FORK_VERSION %s is a semantic version", fork.version)
+	require.GreaterOrEqual(t, semver.Compare(e2e, forkVersion), 0, "KAGENT_RELEASE %s is older than FORK_VERSION %s", match[1], fork.version)
 }
 
 func TestParseForkVersion(t *testing.T) {
