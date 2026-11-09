@@ -86,7 +86,9 @@ jobs:
           done
           printf '%s %.12s\n' "$KAGENT_RELEASE" "$(git -C kagent-upstream rev-parse HEAD)" > FORK_VERSION
           go mod tidy
-          make kagent-extensions-linux-amd64 VERSION="${KAGENT_RELEASE}-e2e"
+          # The Dockerfile's own build line. The Makefile's build targets
+          # compile main.go alone, not the package.
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o kagent-extensions-linux-amd64 .
       - name: Build the image of this checkout
         # The repository's Dockerfile, as CircleCI builds it: the binary
         # comes from the build context as kagent-extensions-<os>-<arch>.
