@@ -82,18 +82,14 @@ jobs:
             docker pull "mirror.gcr.io/${image}"
             docker tag "mirror.gcr.io/${image}" "${image#library/}"
           done
-      - name: Delegate the cgroup controllers gVisor needs to containers
-        # runsc needs cpuset and io in the worker pod's cgroup. systemd enables
-        # a controller in system.slice, where Docker puts the Kind node, only
-        # when a unit there asks for it; these two properties ask for both.
-        run: |
-          sudo systemctl set-property --runtime system.slice "AllowedCPUs=0-$(($(nproc) - 1))" IOWeight=100
-          cat /sys/fs/cgroup/system.slice/cgroup.subtree_control
       - name: Create Kind cluster
         working-directory: kagent-upstream
-        run: |
-          bash scripts/kind/setup-kind.sh
-          docker exec "${KIND_CLUSTER_NAME}-control-plane" cat /sys/fs/cgroup/cgroup.controllers
+        env:
+          # The script prefers podman when it is installed, as it is on the
+          # runner; under podman the worker pods get no cpuset or io
+          # controller, which gVisor needs. The fork's Makefile passes docker.
+          CONTAINER_RUNTIME: docker
+        run: bash scripts/kind/setup-kind.sh
       - name: Build the kagent CLI of the release
         working-directory: kagent-upstream/go
         run: CGO_ENABLED=0 go build -ldflags "-X github.com/kagent-dev/kagent/go/core/internal/version.Version=${KAGENT_RELEASE}" -o "$RUNNER_TEMP/kagent" ./core/cli/cmd/kagent
