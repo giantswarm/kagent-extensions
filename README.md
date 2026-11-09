@@ -198,7 +198,12 @@ against a published binary, not this checkout's binary.
 4. **Keep the dependencies the fork builds with.** A module the fork already
    requires (`github.com/coreos/go-oidc/v3`, `k8s.io/apiserver`, for example)
    stays at the fork's version.
-5. **Follow the fork's resource types.** `TestRulesFollowTheFork` compares
+5. **Move the e2e release.** `KAGENT_RELEASE` in `.github/workflows/e2e.yaml`
+   names the fork release whose `controller-extensions` image the `E2E`
+   workflow runs. Move it to the newest fork release whose
+   `go/kagent-extensions.commit` contains every behaviour `e2e/` tests: a
+   test of a behaviour the image lacks fails the workflow until then.
+6. **Follow the fork's resource types.** `TestRulesFollowTheFork` compares
    `internal/authz/rules.go` with the tables in the fork's own authorizer
    (`core/pkg/auth/kubernetes.go`) at the pinned commit. If the fork added,
    removed or changed a resource type, the test fails: update the rule. Once

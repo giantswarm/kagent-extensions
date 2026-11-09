@@ -91,6 +91,8 @@ jobs:
       - name: Install kagent
         env:
           OPENAI_API_KEY: fake
+          # Docker Hub's image, through its public cache.
+          KAGENT_BUNDLED_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:18-alpine
           KAGENT_HELM_REPO: oci://${{ env.KAGENT_REGISTRY }}/helm/
           KAGENT_HELM_VERSION: ${{ env.KAGENT_RELEASE }}
           KAGENT_HELM_EXTRA_ARGS: >-
@@ -99,7 +101,7 @@ jobs:
             --set kagent-tools.enabled=false
             --set grafana-mcp.enabled=false
             --set substrateWorkerPool.create=true
-            --set substrateWorkerPool.replicas=2
+            --set substrateWorkerPool.replicas=4
             --set substrateWorkerPool.sandboxClass=gvisor
             --set substrateWorkerPool.workerImage=${{ env.SUBSTRATE_IMAGE_REGISTRY }}/ateom-gvisor:${{ env.SUBSTRATE_VERSION }}
             --set harness.create=true
@@ -143,7 +145,14 @@ jobs:
         env:
           KAGENT_E2E_IMAGE: ${{ env.KAGENT_REGISTRY }}/controller-extensions:${{ env.KAGENT_RELEASE }}
           KAGENT_E2E_AGENT: kagent/smoke
-        run: go test ./e2e/ -run '^TestAuthorization$' -v -count=1 -timeout 20m
+        run: |
+          go test ./e2e/ -run '^TestAuthorization$' -v -count=1 -timeout 20m 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+          # A case that skipped here proves nothing: the job sets everything
+          # the suite needs.
+          if grep -- '--- SKIP' "$RUNNER_TEMP/e2e.log"; then
+            echo "::error::a case of TestAuthorization skipped"
+            exit 1
+          fi
       - name: Print the cluster's state
         if: failure()
         run: |
