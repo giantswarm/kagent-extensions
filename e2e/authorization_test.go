@@ -212,9 +212,14 @@ func TestAuthorization(t *testing.T) {
 			_, err := sessions.GetSession(ctx, &apiv1alpha1.GetSessionRequest{SessionId: id})
 			return status.Code(err)
 		}
-		erased := env.startSession(t, sessions, signer, creatorUser)
-		listed := env.startSession(t, sessions, signer, creatorUser)
-		owned := env.startSession(t, sessions, signer, creatorUser)
+		// Every Session of this run carries the run's marker as its name.
+		// The cleanup is registered before the first create, so it also
+		// removes a Session reserved by a create that did not complete.
+		marker := env.tenant
+		env.deleteSessionsAtEnd(t, sessions, signer, creatorUser, marker)
+		erased := env.startSession(t, sessions, signer, creatorUser, marker)
+		listed := env.startSession(t, sessions, signer, creatorUser, marker)
+		owned := env.startSession(t, sessions, signer, creatorUser, marker)
 
 		t.Run("a ServiceAccount granted a cluster-wide delete deletes it", func(t *testing.T) {
 			require.NoError(t, deleteSession(machine(deleterAccount), sessions, erased))
@@ -242,13 +247,13 @@ func TestAuthorization(t *testing.T) {
 	})
 }
 
-// startSession starts a Session on the Agent of agentEnv as the person email
-// and deletes it as them when the test ends, if it is still there.
-func (e *environment) startSession(t *testing.T, sessions apiv1alpha1.SessionServiceClient, signer *tokenSigner, email string) string {
+// startSession starts a Session named marker on the Agent of agentEnv as the
+// person email. deleteSessionsAtEnd removes it.
+func (e *environment) startSession(t *testing.T, sessions apiv1alpha1.SessionServiceClient, signer *tokenSigner, email, marker string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(withBearer(t.Context(), signer.sign(t, signer.personClaims(email))), 4*time.Minute)
 	defer cancel()
-	request := &apiv1alpha1.CreateSessionRequest{Agent: e.agent, RequestId: uuid.NewString()}
+	request := &apiv1alpha1.CreateSessionRequest{Agent: e.agent, RequestId: uuid.NewString(), Name: marker}
 	var created *apiv1alpha1.CreateSessionResponse
 	err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
 		var err error
@@ -261,15 +266,43 @@ func (e *environment) startSession(t *testing.T, sessions apiv1alpha1.SessionSer
 		return err == nil, err
 	})
 	require.NoError(t, err, "CreateSession() on %s/%s", e.agent.GetNamespace(), e.agent.GetName())
-	id := created.GetSession().GetId()
+	return created.GetSession().GetId()
+}
+
+// deleteSessionsAtEnd deletes, when the test ends, every Session of the
+// person email on the Agent of agentEnv that is named marker: a Session the
+// test deleted already is not listed, and one whose create did not complete
+// is.
+func (e *environment) deleteSessionsAtEnd(t *testing.T, sessions apiv1alpha1.SessionServiceClient, signer *tokenSigner, email, marker string) {
+	t.Helper()
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(withBearer(context.Background(), signer.sign(t, signer.personClaims(email))), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(withBearer(context.Background(), signer.sign(t, signer.personClaims(email))), 5*time.Minute)
 		defer cancel()
-		if err := deleteSession(ctx, sessions, id); err != nil && status.Code(err) != codes.NotFound {
-			t.Errorf("delete Session %s: %v", id, err)
+		page := &apiv1alpha1.PageRequest{}
+		var ids []string
+		for {
+			response, err := sessions.ListSessions(ctx, &apiv1alpha1.ListSessionsRequest{Agent: e.agent, Page: page})
+			if err != nil {
+				t.Errorf("list the Sessions of %s to delete them: %v", email, err)
+				return
+			}
+			for _, session := range response.GetSessions() {
+				if session.GetName() == marker {
+					ids = append(ids, session.GetId())
+				}
+			}
+			next := response.GetPage().GetNextPageToken()
+			if next == "" {
+				break
+			}
+			page = &apiv1alpha1.PageRequest{PageToken: next}
+		}
+		for _, id := range ids {
+			if err := deleteSession(ctx, sessions, id); err != nil && status.Code(err) != codes.NotFound {
+				t.Errorf("delete Session %s: %v", id, err)
+			}
 		}
 	})
-	return id
 }
 
 // deleteSession deletes the Session id once no lifecycle work owns it: it
