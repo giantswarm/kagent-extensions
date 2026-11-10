@@ -168,15 +168,17 @@ built on (see "The kagent chart's release"); run the suite against an
 installation of the same release.
 
 The `E2E` GitHub Actions workflow runs the suite on every pull request and on
-`main`, in a Kind cluster that runs a published release of the kagent fork
-(`KAGENT_RELEASE` in `.github/workflows/e2e.yaml`): its chart, its Substrate
-and an Agent of its own. The binary under test is this checkout's, built
-against that release's tree as the fork builds its `controller-extensions`
-image (`go/extensions.Dockerfile`), packed with this repository's
-`Dockerfile` and loaded into the Kind cluster. A change under `internal/` is
-therefore tested on its own pull request. The image is not the fork's
-published `controller-extensions` image: that image has another base, user and
-entrypoint (`go/extensions.Dockerfile`), and the workflow does not run it.
+`main`, in a Kind cluster that runs the published release of the kagent fork
+that `FORK_VERSION` names: its chart, its Substrate and an Agent of its own.
+The workflow reads the release from `FORK_VERSION` and has no pin of its own.
+It checks that the release's tag is the commit `FORK_VERSION` names and that
+`go.mod` has the same `replace` lines as the release. The binary under test is
+this checkout's, built from its own `go.mod` and `go.sum`, packed with this
+repository's `Dockerfile` and loaded into the Kind cluster. A change under
+`internal/` is therefore tested on its own pull request. The image is not the
+fork's published `controller-extensions` image: that image has another base,
+user and entrypoint (`go/extensions.Dockerfile`), and the workflow does not
+run it.
 
 ## Pinning the fork
 
@@ -201,11 +203,10 @@ entrypoint (`go/extensions.Dockerfile`), and the workflow does not run it.
 4. **Keep the dependencies the fork builds with.** A module the fork already
    requires (`github.com/coreos/go-oidc/v3`, `k8s.io/apiserver`, for example)
    stays at the fork's version.
-5. **Check the e2e release.** `KAGENT_RELEASE` in `.github/workflows/e2e.yaml`
-   names the fork release the `E2E` workflow builds this checkout against and
-   runs the cluster on. It must ask the authorizer about a delete of another
-   creator's Session (`1.31.1-rc.3` and later), and it must not be older than
-   the release in `FORK_VERSION` (`TestE2EReleaseIsNotOlderThanForkVersion`).
+5. **The e2e release follows.** The `E2E` workflow reads its release from
+   `FORK_VERSION`. That release must ask the authorizer about a delete of
+   another creator's Session (`1.31.1-rc.3` and later), or the delete cases
+   of the suite fail.
 6. **Follow the fork's resource types.** `TestRulesFollowTheFork` compares
    `internal/authz/rules.go` with the tables in the fork's own authorizer
    (`core/pkg/auth/kubernetes.go`) at the pinned commit. If the fork added,
@@ -215,9 +216,10 @@ entrypoint (`go/extensions.Dockerfile`), and the workflow does not run it.
    authorizer.
 
 Then run `go mod tidy`, `go build ./...` and `go test ./...`.
-`renovate-custom.json5` keeps Renovate off the fork pin and the modules the
-fork requires that this binary uses directly (`github.com/coreos/go-oidc/v3`,
-`k8s.io/*`): a digest of the fork's branch carries migrations no release has,
+`renovate-custom.json5` keeps Renovate off the fork pin, the fork's `replace`
+lines (`github.com/giantswarm/substrate`) and the modules the fork requires
+that this binary uses directly (`github.com/coreos/go-oidc/v3`, `k8s.io/*`):
+a digest of the fork's branch carries migrations no release has,
 which the binary would apply to an installation's database.
 
 ## Build
