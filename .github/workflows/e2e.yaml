@@ -73,8 +73,8 @@ jobs:
           install_only: true
       - name: Check that go.mod pins the release's tree
         # go.mod pins the fork at the commit FORK_VERSION names; this step
-        # checks that the release's tag is that commit and that go.mod carries
-        # the release's own replace lines (a dependency's replace lines do not
+        # checks that the release's tag is that commit and that go.mod has the
+        # same replace lines as the release (a dependency's replace lines do not
         # apply to the main module). The checkout then builds as it is, and
         # the binary under test is the binary this repository ships.
         run: |
@@ -87,12 +87,12 @@ jobs:
             echo "::error::the release's go.mod has a replace block, which this step does not compare"
             exit 1
           fi
-          { grep '^replace ' kagent-upstream/go/go.mod || true; } | while read -r line; do
-            if ! grep -qxF "$line" go.mod; then
-              echo "::error::go.mod does not have the release's line: ${line}"
-              exit 1
-            fi
-          done
+          # "<old> <new> <version>" of each replace line, without the fork's own.
+          replaces() { awk '$1 == "replace" && $2 != "github.com/kagent-dev/kagent/go" { print $2, $4, $5 }' "$1" | sort; }
+          if ! diff <(replaces kagent-upstream/go/go.mod) <(replaces go.mod); then
+            echo "::error::go.mod's replace lines (>) differ from the release's (<)"
+            exit 1
+          fi
       - name: Build the binary of this checkout
         # The Dockerfile's own build line, on the checkout's go.mod and go.sum
         # unchanged. The Makefile's build targets compile main.go alone, not
