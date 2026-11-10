@@ -11,6 +11,9 @@
       ],
       matchPackageNames: [
         'github.com/giantswarm/kagent-upstream/go',
+        // The fork's own replace line, copied into go.mod; the E2E workflow
+        // fails when the two differ.
+        'github.com/giantswarm/substrate',
         'github.com/coreos/go-oidc/v3',
         'k8s.io/**',
       ],

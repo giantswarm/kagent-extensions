@@ -1,10 +1,10 @@
 name: E2E
 
-# Runs e2e/TestAuthorization in a Kind cluster against a published release of
-# the kagent fork (giantswarm/kagent-upstream): its kagent chart and its
-# Substrate. The binary under test is this checkout's, built against that
-# release's tree as the fork builds its controller-extensions image
-# (go/extensions.Dockerfile), and packed with this repository's Dockerfile.
+# Runs e2e/TestAuthorization in a Kind cluster against the published release of
+# the kagent fork (giantswarm/kagent-upstream) that FORK_VERSION names: its
+# kagent chart and its Substrate. The binary under test is this checkout's,
+# built from its own go.mod (which pins that release's tag commit) and packed
+# with this repository's Dockerfile.
 on:
   pull_request:
   push:
@@ -19,13 +19,8 @@ permissions:
   contents: read
 
 env:
-  # The fork release the cluster runs, and the tree the binary under test is
-  # built against. It is not FORK_VERSION: the binary runs only under the
-  # kagent chart of the release it is built on, and the release must ask the
-  # authorizer about a delete of another creator's Session (1.31.1-rc.3 and
-  # later); FORK_VERSION is older. TestE2EReleaseIsNotOlderThanForkVersion
-  # fails when it is older than FORK_VERSION.
-  KAGENT_RELEASE: 1.31.1-rc.6
+  # KAGENT_RELEASE, the fork release the cluster runs, is not set here: the
+  # first step reads it from FORK_VERSION, so the two cannot differ.
   KAGENT_REGISTRY: gsoci.azurecr.io/giantswarm/kagent
   KIND_CLUSTER_NAME: kagent
   # The image the job builds from this checkout and loads into the Kind
@@ -44,6 +39,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read the fork release from FORK_VERSION
+        # FORK_VERSION is "<release> <first 12 characters of its tag commit>";
+        # TestForkVersionMatchesGoMod holds the commit to go.mod's pin.
+        run: |
+          read -r release commit < FORK_VERSION
+          echo "KAGENT_RELEASE=${release#v}" | tee -a "$GITHUB_ENV"
+          echo "FORK_COMMIT=${commit}" | tee -a "$GITHUB_ENV"
       - name: Checkout the fork release
         # Its Kind setup, its kagent CLI (the installer), its development
         # PostgreSQL and its Substrate pin.
@@ -69,33 +71,33 @@ jobs:
         with:
           version: v0.33.0
           install_only: true
-      - name: Build the binary of this checkout against the release's tree
-        # As the RUN line of go/extensions.Dockerfile at the release's tag
-        # does (keep the two in step): this module builds
-        # against the release's go module with the release's own replace lines
-        # (a dependency's replace lines do not apply to the main module), and
-        # FORK_VERSION names the release, which the binary checks the chart's
-        # IMAGE_TAG against at start. The test code then compiles against the
-        # same tree.
+      - name: Check that go.mod pins the release's tree
+        # go.mod pins the fork at the commit FORK_VERSION names; this step
+        # checks that the release's tag is that commit and that go.mod carries
+        # the release's own replace lines (a dependency's replace lines do not
+        # apply to the main module). The checkout then builds as it is, and
+        # the binary under test is the binary this repository ships.
         run: |
-          if grep -q '^replace (' kagent-upstream/go/go.mod; then
-            echo "::error::the release's go.mod has a replace block, which this step does not copy"
+          tag_commit=$(git -C kagent-upstream rev-parse HEAD)
+          if [ "${tag_commit:0:12}" != "$FORK_COMMIT" ]; then
+            echo "::error::FORK_VERSION names commit ${FORK_COMMIT}, but tag v${KAGENT_RELEASE} is ${tag_commit}"
             exit 1
           fi
-          go mod edit -replace "github.com/kagent-dev/kagent/go=${GITHUB_WORKSPACE}/kagent-upstream/go"
-          { grep '^replace ' kagent-upstream/go/go.mod || true; } | while read -r _ old _ new version; do
-            go mod edit -replace "${old}=${new}@${version}"
+          if grep -q '^replace (' kagent-upstream/go/go.mod; then
+            echo "::error::the release's go.mod has a replace block, which this step does not compare"
+            exit 1
+          fi
+          { grep '^replace ' kagent-upstream/go/go.mod || true; } | while read -r line; do
+            if ! grep -qxF "$line" go.mod; then
+              echo "::error::go.mod does not have the release's line: ${line}"
+              exit 1
+            fi
           done
-          printf '%s %.12s\n' "$KAGENT_RELEASE" "$(git -C kagent-upstream rev-parse HEAD)" > FORK_VERSION
-          for attempt in 1 2 3; do
-            go mod tidy && break
-            [ "$attempt" -lt 3 ] || exit 1
-            echo "go mod tidy failed (attempt $attempt of 3), retrying in 5s"
-            sleep 5
-          done
-          # The Dockerfile's own build line. The Makefile's build targets
-          # compile main.go alone, not the package.
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o kagent-extensions-linux-amd64 .
+      - name: Build the binary of this checkout
+        # The Dockerfile's own build line, on the checkout's go.mod and go.sum
+        # unchanged. The Makefile's build targets compile main.go alone, not
+        # the package.
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o kagent-extensions-linux-amd64 .
       - name: Build the image of this checkout
         # The repository's Dockerfile, as CircleCI builds it: the binary
         # comes from the build context as kagent-extensions-<os>-<arch>. It is
