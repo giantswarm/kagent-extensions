@@ -101,7 +101,9 @@ jobs:
         # controller-extensions. It builds the kagent-extensions commit that
         # go/kagent-extensions.commit names, fetched from GitHub; that file is
         # set to this checkout's commit, which the Dockerfile checks after the
-        # fetch. The image is therefore the fork's published runtime (its base
+        # fetch. On a pull request that commit is GitHub's merge commit
+        # (refs/pull/<n>/merge): a fetch error here means GitHub did not serve
+        # it, not that a test failed. The image is therefore the fork's published runtime (its base
         # image, user 65532 and HOME) with this checkout's code in it, and a
         # change of that runtime in a release that breaks the controller fails
         # this job.

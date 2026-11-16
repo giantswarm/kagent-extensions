@@ -154,9 +154,14 @@ image must be pullable by the cluster. Suspend anything that reverts drift on
 the controller Deployment (a Flux HelmRelease with drift detection) for the run.
 
 ```sh
-KAGENT_E2E_IMAGE=gsoci.azurecr.io/giantswarm/kagent-extensions:<version> \
+KAGENT_E2E_IMAGE=gsoci.azurecr.io/giantswarm/kagent/controller-extensions:<release> \
   go test ./e2e/ -v -count=1 -timeout 20m
 ```
+
+The fork's `controller-extensions` image is the runtime the installations run
+and the `E2E` workflow tests. This repository's own image
+(`gsoci.azurecr.io/giantswarm/kagent-extensions`, from its `Dockerfile`) is
+another runtime (`scratch`, user 1000), and no workflow runs the suite on it.
 
 `KAGENT_E2E_NAMESPACE` names the controller's namespace (default `kagent`),
 `KAGENT_E2E_ISSUER_IMAGE` an image with busybox's `httpd` (default
