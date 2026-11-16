@@ -172,13 +172,14 @@ The `E2E` GitHub Actions workflow runs the suite on every pull request and on
 that `FORK_VERSION` names: its chart, its Substrate and an Agent of its own.
 The workflow reads the release from `FORK_VERSION` and has no pin of its own.
 It checks that the release's tag is the commit `FORK_VERSION` names and that
-`go.mod` has the same `replace` lines as the release. The binary under test is
-this checkout's, built from its own `go.mod` and `go.sum`, packed with this
-repository's `Dockerfile` and loaded into the Kind cluster. A change under
-`internal/` is therefore tested on its own pull request. The image is not the
-fork's published `controller-extensions` image: that image has another base,
-user and entrypoint (`go/extensions.Dockerfile`), and the workflow does not
-run it.
+`go.mod` has the same `replace` lines as the release. The image under test is
+built with the release's `go/extensions.Dockerfile`, the file that builds the
+fork's published `controller-extensions` image, with the commit of this
+checkout as its source, and loaded into the Kind cluster. It has the runtime
+the installations run (the base image, user 65532 and `HOME`) and the code of
+this checkout. A change under `internal/` is therefore tested on its own pull
+request, and a change of the fork's runtime that breaks the controller fails
+the workflow once `FORK_VERSION` names that release.
 
 ## Pinning the fork
 
