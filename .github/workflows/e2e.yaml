@@ -2,9 +2,10 @@ name: E2E
 
 # Runs e2e/TestAuthorization in a Kind cluster against the published release of
 # the kagent fork (giantswarm/kagent-upstream) that FORK_VERSION names: its
-# kagent chart and its Substrate. The binary under test is this checkout's,
-# built from its own go.mod (which pins that release's tag commit) and packed
-# with this repository's Dockerfile.
+# kagent chart and its Substrate. The image under test is built with that
+# release's go/extensions.Dockerfile, the file that builds the fork's published
+# controller-extensions image, with this checkout's commit as its source: the
+# code of this checkout in the runtime the installations run.
 on:
   pull_request:
   push:
@@ -75,8 +76,9 @@ jobs:
         # go.mod pins the fork at the commit FORK_VERSION names; this step
         # checks that the release's tag is that commit and that go.mod has the
         # same replace lines as the release (a dependency's replace lines do not
-        # apply to the main module). The checkout then builds as it is, and
-        # the binary under test is the binary this repository ships.
+        # apply to the main module). The fork's Dockerfile builds the checkout
+        # against the release's tree with the release's replace lines; this
+        # check keeps this repository's own build on that same tree.
         run: |
           tag_commit=$(git -C kagent-upstream rev-parse HEAD)
           if [ "${tag_commit:0:12}" != "$FORK_COMMIT" ]; then
@@ -93,21 +95,29 @@ jobs:
             echo "::error::go.mod's replace lines (>) differ from the release's (<)"
             exit 1
           fi
-      - name: Build the binary of this checkout
-        # The Dockerfile's own build line, on the checkout's go.mod and go.sum
-        # unchanged. The Makefile's build targets compile main.go alone, not
-        # the package.
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o kagent-extensions-linux-amd64 .
-      - name: Build the image of this checkout
-        # The repository's Dockerfile, as CircleCI builds it: the binary
-        # comes from the build context as kagent-extensions-<os>-<arch>. It is
-        # not the runtime of the fork's published controller-extensions image
-        # (go/extensions.Dockerfile: another base, user and entrypoint).
+      - name: Build the image of this checkout in the fork's runtime
+        # The release's go/extensions.Dockerfile, with the build context and
+        # the build arguments the fork's CircleCI pipeline gives it to publish
+        # controller-extensions. It builds the kagent-extensions commit that
+        # go/kagent-extensions.commit names, fetched from GitHub; that file is
+        # set to this checkout's commit, which the Dockerfile checks after the
+        # fetch. On a pull request that commit is GitHub's merge commit
+        # (refs/pull/<n>/merge): a fetch error here means GitHub did not serve
+        # it, not that a test failed. The image is therefore the fork's published runtime (its base
+        # image, user 65532 and HOME) with this checkout's code in it, and a
+        # change of that runtime in a release that breaks the controller fails
+        # this job.
         run: |
-          context="$RUNNER_TEMP/image"
-          mkdir -p "$context"
-          cp kagent-extensions-linux-amd64 "$context/"
-          docker build --platform linux/amd64 -f Dockerfile -t "$E2E_IMAGE" "$context"
+          commit=$(git rev-parse HEAD)
+          fork_commit=$(git -C kagent-upstream rev-parse HEAD)
+          echo "$commit" > kagent-upstream/go/kagent-extensions.commit
+          version_pkg=github.com/kagent-dev/kagent/go/core/internal/version
+          docker build --platform linux/amd64 \
+            -f kagent-upstream/go/extensions.Dockerfile \
+            --build-arg "VERSION=${KAGENT_RELEASE}" \
+            --build-arg "LDFLAGS=-X ${version_pkg}.Version=${KAGENT_RELEASE} -X ${version_pkg}.GitCommit=${fork_commit}" \
+            --build-arg "FORK_COMMIT=${fork_commit}" \
+            -t "$E2E_IMAGE" kagent-upstream/go
       - name: Allow unprivileged user namespaces
         # Ubuntu 24.04 restricts them through AppArmor; the gVisor workers
         # need them.
